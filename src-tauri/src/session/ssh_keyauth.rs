@@ -41,7 +41,7 @@ pub fn unsupported_format_message(text: &str) -> Option<String> {
 /// Parses and (if needed) decrypts an OpenSSH private key.
 pub fn decode(text: &str, passphrase: Option<&str>) -> Result<PrivateKey, String> {
     // Keys copied on Windows may use CR+LF line endings
-    let normalized = text.trim().replace("\r\n", "\n");
+    let normalized = zeroize::Zeroizing::new(text.trim().replace("\r\n", "\n"));
     let key = PrivateKey::from_openssh(normalized.as_bytes())
         .map_err(|e| tr!("Nie można odczytać klucza prywatnego OpenSSH: {}", "Cannot read the OpenSSH private key: {}", e))?;
     if !key.is_encrypted() {

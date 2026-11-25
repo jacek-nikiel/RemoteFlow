@@ -611,10 +611,14 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
       return;
     }
 
-    // 3. Fallback: plain text dropped -> send to terminal
+    // 3. Fallback: plain text dropped -> pasted like Ctrl+V: xterm turns line breaks into Enter
+    //    and wraps the text in bracketed-paste markers when the shell asked for them, so a dropped
+    //    multi-line text is not executed line by line right away.
     const text = e.dataTransfer.getData('text/plain');
     if (text) {
-      api.sendInput(session.sessionId, text);
+      const term = termRef.current;
+      if (term) term.paste(text);
+      else api.sendInput(session.sessionId, text.replace(/\r\n?|\n/g, '\r'));
       showNotification(t('Wklejono tekst ze schowka'));
     }
   };

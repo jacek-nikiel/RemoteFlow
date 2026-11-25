@@ -19,6 +19,16 @@ pub struct RdpConnectionConfig {
     pub embed: Option<EmbedTarget>,
 }
 
+/// The password is wiped from memory when the config is dropped.
+impl Drop for RdpConnectionConfig {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        if let Some(p) = &mut self.password {
+            p.zeroize();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EmbedTarget {
     /// X11 window id of the container window
@@ -260,11 +270,12 @@ pub fn spawn_rdp_session(
             // Only the dedicated exchange folder is shared with the remote session (visible in Windows
             // Explorer as "RemoteFlow on <hostname>" / \\tsclient\RemoteFlow). The home folder is NOT
             // shared – the server would get read/write access to all personal files (SSH keys, the vault…).
-            let shared_dir = dirs::home_dir()
-                .map(|h| h.join("RemoteFlow_Shared"))
-                .unwrap_or_else(|| std::path::PathBuf::from("/tmp/remoteflow_shared"));
-            let _ = std::fs::create_dir_all(&shared_dir);
-            cmd.arg(format!("/drive:RemoteFlow,{}", shared_dir.to_string_lossy()));
+            match crate::session::shared_exchange_dir() {
+                Ok(shared_dir) => {
+                    cmd.arg(format!("/drive:RemoteFlow,{}", shared_dir.to_string_lossy()));
+                }
+                Err(e) => eprintln!("[RemoteFlow RDP] Folder wymiany niedostępny: {}", e),
+            }
 
             if let Some(settings) = &config.rdp_settings {
                 if settings.sound {

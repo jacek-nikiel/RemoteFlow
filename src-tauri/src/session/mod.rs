@@ -8,6 +8,7 @@ pub mod ssh_algos;
 pub mod ssh_keyauth;
 pub mod transfer;
 pub mod preview;
+pub mod localfs;
 pub mod tunnels;
 
 #[cfg(target_os = "linux")]
@@ -223,12 +224,21 @@ fn read_certificate_file(path: &Option<String>) -> Option<String> {
     read_certificate(std::path::Path::new(path)).ok()
 }
 
+/// Key file of a connection/credential. The path may come from an imported file, so it gets the
+/// same checks as a key picked in the dialog (size limit, private key header); anything else is
+/// ignored (the key stored in the vault is used, if any).
 fn read_key_file(path: &Option<String>) -> Option<String> {
     let path = path.as_deref()?.trim();
-    if path.is_empty() || !std::path::Path::new(path).is_file() {
+    if path.is_empty() {
         return None;
     }
-    std::fs::read_to_string(path).ok()
+    match read_private_key_file(std::path::Path::new(path)) {
+        Ok(content) => Some(content),
+        Err(e) => {
+            eprintln!("[RemoteFlow] Pominięto plik klucza {:?}: {}", path, e);
+            None
+        }
+    }
 }
 
 /// Resolves a saved connection. Host, port and protocol ALWAYS come from the vault, never from the
@@ -822,7 +832,8 @@ pub async fn sftp_mkfile(
 
 /// New empty local file (SFTP window); returns its path.
 #[tauri::command]
-pub async fn local_mkfile(parent: String, name: String) -> Result<String, String> {
+pub async fn local_mkfile(parent: String, name: String, auth_state: tauri::State<'_, AuthState>) -> Result<String, String> {
+    localfs::local_access(&auth_state)?.check(std::path::Path::new(&parent).join(&name))?;
     tokio::task::spawn_blocking(move || transfer::local_mkfile(&parent, &name))
         .await
         .map_err(|e| e.to_string())?
@@ -876,6 +887,10 @@ pub async fn sftp_transfer_upload(
     app: tauri::AppHandle,
 ) -> Result<transfer::TransferSummary, String> {
     let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
+    let access = localfs::local_access(&auth_state)?;
+    for p in &local_paths {
+        access.check(p)?;
+    }
     let guard = CancelGuard::new(&transfer_id);
     let mut progress = progress_emitter(app.clone(), transfer_id);
     tokio::task::spawn_blocking(move || transfer::upload_paths(&config, &local_paths, &remote_dir, &mut progress, &guard.flag))
@@ -893,6 +908,7 @@ pub async fn sftp_transfer_download(
     app: tauri::AppHandle,
 ) -> Result<transfer::TransferSummary, String> {
     let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
+    localfs::local_access(&auth_state)?.check(&local_dir)?;
     let guard = CancelGuard::new(&transfer_id);
     let mut progress = progress_emitter(app.clone(), transfer_id);
     tokio::task::spawn_blocking(move || transfer::download_paths(&config, &remote_paths, &local_dir, &mut progress, &guard.flag))
@@ -907,7 +923,8 @@ pub fn sftp_release(connection_id: String) {
 }
 
 #[tauri::command]
-pub async fn local_mkdir(parent: String, name: String) -> Result<String, String> {
+pub async fn local_mkdir(parent: String, name: String, auth_state: tauri::State<'_, AuthState>) -> Result<String, String> {
+    localfs::local_access(&auth_state)?.check(std::path::Path::new(&parent).join(&name))?;
     tokio::task::spawn_blocking(move || transfer::local_mkdir(&parent, &name))
         .await
         .map_err(|e| e.to_string())?
@@ -925,6 +942,7 @@ pub async fn preview_stat(
     app: tauri::AppHandle,
 ) -> Result<preview::FileStat, String> {
     if side == "local" {
+        localfs::local_access(&auth_state)?.check(&path)?;
         return tokio::task::spawn_blocking(move || preview::local_stat(&path)).await.map_err(|e| e.to_string())?;
     }
     let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
@@ -945,6 +963,7 @@ pub async fn preview_read(
     app: tauri::AppHandle,
 ) -> Result<tauri::ipc::Response, String> {
     let bytes = if side == "local" {
+        localfs::local_access(&auth_state)?.check(&path)?;
         tokio::task::spawn_blocking(move || preview::local_read(&path, offset, length)).await.map_err(|e| e.to_string())??
     } else {
         let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
@@ -992,6 +1011,7 @@ pub async fn preview_save(
     let expected = args.expected_size.zip(args.expected_modified);
     let data = data.clone();
     if args.side == "local" {
+        localfs::local_access(&auth_state)?.check(&args.path)?;
         return tokio::task::spawn_blocking(move || preview::local_save(&args.path, &data, expected))
             .await
             .map_err(|e| e.to_string())?;
@@ -1006,7 +1026,11 @@ pub async fn preview_save(
 
 /// Deletes local files/folders (SFTP window). See `transfer::local_delete`.
 #[tauri::command]
-pub async fn local_delete_paths(paths: Vec<String>, permanent: bool) -> Result<u32, String> {
+pub async fn local_delete_paths(paths: Vec<String>, permanent: bool, auth_state: tauri::State<'_, AuthState>) -> Result<u32, String> {
+    let access = localfs::local_access(&auth_state)?;
+    for p in &paths {
+        access.check_delete(p)?;
+    }
     tokio::task::spawn_blocking(move || {
         let mut n = 0;
         for p in &paths {
@@ -1020,7 +1044,8 @@ pub async fn local_delete_paths(paths: Vec<String>, permanent: bool) -> Result<u
 }
 
 #[tauri::command]
-pub async fn local_search(local_dir: String, query: String) -> Result<Vec<sftp::SftpFileEntry>, String> {
+pub async fn local_search(local_dir: String, query: String, auth_state: tauri::State<'_, AuthState>) -> Result<Vec<sftp::SftpFileEntry>, String> {
+    localfs::require_unlocked(&auth_state)?;
     tokio::task::spawn_blocking(move || transfer::local_search(&local_dir, &query))
         .await
         .map_err(|e| e.to_string())?
@@ -1073,6 +1098,10 @@ pub async fn sftp_upload_paths(
     app: tauri::AppHandle,
 ) -> Result<u32, String> {
     let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
+    let access = localfs::local_access(&auth_state)?;
+    for p in &local_paths {
+        access.check(p)?;
+    }
     tokio::task::spawn_blocking(move || {
         sftp::sftp_upload_local_paths(&config, local_paths, &remote_dir)
     })
@@ -1110,8 +1139,23 @@ pub fn open_shared_folder(target_dir: Option<String>) -> Result<String, String> 
 pub async fn save_dropped_file_to_shared(
     filename: String,
     content_base64: String,
-    target_dir: Option<String>,
+    connection_id: Option<String>,
+    auth_state: tauri::State<'_, AuthState>,
 ) -> Result<String, String> {
+    // The target folder is the connection's exchange folder from the vault, never a path from the UI
+    let access = localfs::local_access(&auth_state)?;
+    let target_dir = match connection_id.filter(|id| !id.is_empty()) {
+        Some(id) => {
+            let mgr = lock_auth(&auth_state)?;
+            let key = mgr.unlocked_key()?;
+            load_vault_verified(key)?
+                .connections
+                .into_iter()
+                .find(|c| c.id == id)
+                .and_then(|c| c.default_download_dir)
+        }
+        None => None,
+    };
     tokio::task::spawn_blocking(move || {
         use base64::Engine;
         let data = base64::engine::general_purpose::STANDARD
@@ -1121,7 +1165,9 @@ pub async fn save_dropped_file_to_shared(
         let save_dir = if let Some(dir) = target_dir.filter(|s| !s.trim().is_empty()) {
             std::path::PathBuf::from(dir)
         } else {
-            dirs::download_dir().or_else(dirs::home_dir).unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            dirs::download_dir()
+                .or_else(dirs::home_dir)
+                .ok_or_else(|| tr!("Nie znaleziono katalogu pobierania", "The downloads folder was not found").to_string())?
         };
 
         let _ = std::fs::create_dir_all(&save_dir);
@@ -1144,6 +1190,7 @@ pub async fn save_dropped_file_to_shared(
             let _ = std::fs::create_dir_all(&target_path);
         }
         target_path = target_path.join(parts.last().unwrap());
+        access.check(&target_path)?;
 
         std::fs::write(&target_path, &data)
             .map_err(|e| tr!("Błąd zapisu pliku do katalogu wymiany: {}", "Error writing the file to the exchange folder: {}", e))?;
@@ -1256,6 +1303,45 @@ pub async fn clipboard_write_text(text: String, app: tauri::AppHandle) -> Result
     }
 }
 
+/// How long a copied password stays on the clipboard.
+const SECRET_CLIPBOARD_SECS: u64 = 30;
+static SECRET_CLIPBOARD_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Copies a password: on Windows kept out of the clipboard history and cloud sync; after
+/// 30 seconds the clipboard is cleared if it still holds this password (and no newer one was copied).
+#[tauri::command]
+pub async fn clipboard_write_secret(text: String, app: tauri::AppHandle) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let secret = zeroize::Zeroizing::new(text);
+    #[cfg(target_os = "windows")]
+    {
+        let copy = secret.clone();
+        tokio::task::spawn_blocking(move || winproc::clipboard_set_secret(&copy)).await.map_err(|e| e.to_string())??;
+    }
+    #[cfg(not(target_os = "windows"))]
+    clipboard_write_text(secret.to_string(), app.clone()).await?;
+
+    let generation = SECRET_CLIPBOARD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(SECRET_CLIPBOARD_SECS)).await;
+        if SECRET_CLIPBOARD_GENERATION.load(Ordering::SeqCst) != generation || secret.is_empty() {
+            return;
+        }
+        let current = zeroize::Zeroizing::new(clipboard_read_text(app.clone()).await.unwrap_or_default());
+        if *current != *secret {
+            return; // the user copied something else meanwhile
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = app;
+            let _ = tokio::task::spawn_blocking(winproc::clipboard_clear).await;
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = clipboard_write_text(String::new(), app).await;
+    });
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn clipboard_read_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     #[cfg(target_os = "linux")]
@@ -1345,7 +1431,8 @@ pub async fn clipboard_read_files(app: tauri::AppHandle) -> Result<Vec<String>, 
 }
 
 #[tauri::command]
-pub async fn local_list_dir(local_path: String) -> Result<SftpListResponse, String> {
+pub async fn local_list_dir(local_path: String, auth_state: tauri::State<'_, AuthState>) -> Result<SftpListResponse, String> {
+    localfs::require_unlocked(&auth_state)?;
     tokio::task::spawn_blocking(move || {
         let target = if local_path.is_empty() || local_path == "~" || local_path == "." {
             dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
@@ -1535,7 +1622,7 @@ pub struct PickedKeyFile {
 const MAX_KEY_FILE_BYTES: u64 = 64 * 1024;
 
 /// Checks that a file chosen as an SSH private key really looks like one.
-fn read_private_key_file(path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn read_private_key_file(path: &std::path::Path) -> Result<String, String> {
     let meta = std::fs::metadata(path).map_err(|e| tr!("Błąd odczytu pliku '{}': {}", "Error reading file '{}': {}", path.display(), e))?;
     if !meta.is_file() || meta.len() > MAX_KEY_FILE_BYTES {
         return Err(tr!("Wybrany plik nie jest kluczem prywatnym SSH", "The selected file is not an SSH private key").to_string());
@@ -1716,19 +1803,41 @@ fn collect_rdp_clipboard_entries(
     Ok(())
 }
 
+/// Folder shared with RDP sessions (FreeRDP drive "RemoteFlow", files for the remote clipboard):
+/// `~/RemoteFlow_Shared`, owner-only on Unix (0700 – also an existing folder is tightened). No
+/// fallback to a folder every local user can write to (`/tmp`).
+pub(crate) fn shared_exchange_dir() -> Result<std::path::PathBuf, String> {
+    let dir = dirs::home_dir()
+        .ok_or_else(|| tr!("Nie znaleziono katalogu domowego", "The home folder was not found").to_string())?
+        .join("RemoteFlow_Shared");
+    crate::vault::storage::create_private_dir(&dir)
+        .map_err(|e| tr!("Nie można utworzyć katalogu {:?}: {}", "Cannot create folder {:?}: {}", dir, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::symlink_metadata(&dir) {
+            if meta.is_dir() && meta.permissions().mode() & 0o077 != 0 {
+                let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+    }
+    Ok(dir)
+}
+
 #[tauri::command]
 pub async fn read_local_paths_for_rdp_clipboard(
     local_paths: Vec<String>,
+    auth_state: tauri::State<'_, AuthState>,
 ) -> Result<Vec<RdpClipboardFileEntry>, String> {
+    let access = localfs::local_access(&auth_state)?;
+    for p in &local_paths {
+        access.check(p)?;
+    }
+    let shared_dir = shared_exchange_dir()?;
     tokio::task::spawn_blocking(move || {
         let home_dir = dirs::home_dir()
             .map(|h| h.to_string_lossy().trim_end_matches('/').to_string())
             .unwrap_or_default();
-
-        let shared_dir = dirs::home_dir()
-            .map(|h| h.join("RemoteFlow_Shared"))
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/remoteflow_shared"));
-        let _ = std::fs::create_dir_all(&shared_dir);
 
         let mut result = Vec::new();
         for lp in local_paths {

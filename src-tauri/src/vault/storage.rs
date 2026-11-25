@@ -296,15 +296,47 @@ pub fn delete_vault() -> Result<(), String> {
     let _guard = lock_io();
     let path = get_vault_path();
     if path.exists() {
-        let backup_path = path.with_extension(format!("json.bak_{}", chrono::Utc::now().timestamp()));
+        let backup_path = reset_backup_path(&path);
         fs::rename(&path, &backup_path).map_err(|e| tr!("Nie udało się utworzyć kopii sejfu: {}", "Could not back up the vault: {}", e))?;
     }
     Ok(())
 }
 
+/// `vault.json.bak_<milliseconds>` that does not exist yet: `rename` replaces an existing file on
+/// Unix, so two resets close together must never reuse a name (the first copy would be lost).
+fn reset_backup_path(path: &Path) -> PathBuf {
+    let stamp = chrono::Utc::now().timestamp_millis();
+    let mut candidate = path.with_extension(format!("json.bak_{stamp}"));
+    let mut n = 1;
+    while candidate.exists() {
+        candidate = path.with_extension(format!("json.bak_{stamp}_{n}"));
+        n += 1;
+    }
+    candidate
+}
+
 #[cfg(test)]
 mod path_tests {
     use super::*;
+
+    #[test]
+    fn reset_backup_names_never_collide() {
+        let dir = std::env::temp_dir().join(format!("rf-reset-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let vault = dir.join("vault.json");
+        let mut names = std::collections::HashSet::new();
+        for i in 0..5 {
+            fs::write(&vault, format!("vault {i}")).unwrap();
+            let target = reset_backup_path(&vault);
+            assert!(!target.exists());
+            fs::rename(&vault, &target).unwrap();
+            assert!(names.insert(target));
+        }
+        // Every reset kept its own copy
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 5);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn tests_use_a_private_vault_path() {

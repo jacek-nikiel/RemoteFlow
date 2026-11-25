@@ -848,7 +848,7 @@ pub(crate) fn vault_export_impl(export_password: Option<String>, allow_plaintext
         let password = Zeroizing::new(password);
         check_new_password(&password, tr!("Hasło eksportu", "The export password"))?;
 
-        let decrypted_data = DecryptedExportData {
+        let mut decrypted_data = DecryptedExportData {
             groups: vault.groups,
             connections: clean_connections,
             credentials: clean_credentials,
@@ -857,6 +857,20 @@ pub(crate) fn vault_export_impl(export_password: Option<String>, allow_plaintext
         let json_bytes = Zeroizing::new(
             serde_json::to_vec(&decrypted_data).map_err(|e| tr!("Błąd serializacji danych eksportu: {}", "Export data serialisation error: {}", e))?,
         );
+        // The decrypted secrets are only needed in the serialised (wiped on drop) buffer
+        {
+            use zeroize::Zeroize;
+            for c in &mut decrypted_data.connections {
+                for secret in [&mut c.password_encrypted, &mut c.private_key_encrypted, &mut c.private_key_passphrase_encrypted].into_iter().flatten() {
+                    secret.zeroize();
+                }
+            }
+            for c in &mut decrypted_data.credentials {
+                for secret in [&mut c.password_encrypted, &mut c.private_key_encrypted, &mut c.private_key_passphrase_encrypted].into_iter().flatten() {
+                    secret.zeroize();
+                }
+            }
+        }
 
         let salt = generate_salt();
         let export_key = derive_key(&password, &salt)?;
@@ -1871,11 +1885,15 @@ pub fn vault_set_backup_settings(settings: BackupSettings, state: tauri::State<'
         if !path.is_absolute() {
             return Err(tr!("Katalog kopii zapasowych musi być ścieżką bezwzględną", "The backup folder must be an absolute path").to_string());
         }
-        std::fs::create_dir_all(path).map_err(|e| tr!("Nie można utworzyć katalogu kopii: {}", "Cannot create the backup folder: {}", e))?;
     }
 
     let mgr = lock_auth(&state)?;
     let key = mgr.unlocked_key()?;
+    if let Some(dir) = &settings.dir {
+        // Only once the vault is unlocked; owner-only like the default backup folder
+        crate::vault::storage::create_private_dir(std::path::Path::new(dir))
+            .map_err(|e| tr!("Nie można utworzyć katalogu kopii: {}", "Cannot create the backup folder: {}", e))?;
+    }
     update_vault(key, |v| {
         v.metadata.backup = settings;
         Ok(())

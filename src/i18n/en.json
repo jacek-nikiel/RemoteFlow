@@ -148,7 +148,6 @@
   "Hasło nie będzie przechowywane w programie. Przed otwarciem sesji pojawi się okienko z prośbą o podanie passphrase.": "The passphrase is not stored. A prompt will ask for it before the session opens.",
   "Hasło nie zostanie zapisane na dysku i zostanie użyte tylko dla tej sesji połączenia.": "The passphrase is not stored on disk and is used only for this connection session.",
   "Hasło odszyfrowania pliku (jeśli plik był zaszyfrowany hasłem)": "File decryption password (if the file was encrypted)",
-  "Hasło sesji „{title}” zostało skopiowane do schowka!": "The password of “{title}” has been copied to the clipboard!",
   "Hasło skopiowane!": "Password copied!",
   "Hasło szyfrujące plik eksportu": "Export file encryption password",
   "Hasło użyte do zabezpieczenia pliku confCons.xml": "Password used to protect the confCons.xml file",
@@ -437,7 +436,6 @@
   "sesji": "sessions",
   "Siatka 2x2 (4 okna równocześnie)": "2×2 grid (4 windows at once)",
   "Silne hasło główne...": "Strong master password...",
-  "Skopiowano hasło do schowka!": "Password copied to the clipboard!",
   "Skopiowano pliki w sesji Windows. Kliknij, aby pobrać je od razu na komputer (do wspólnego katalogu wymiany).": "Files were copied in the Windows session. Click to download them to your computer now (to the shared exchange folder).",
   "Skopiowano tekst z Windows do schowka": "Text copied from Windows to the clipboard",
   "Skopiowano w sesji Windows ({n}):": "Copied in the Windows session ({n}):",
@@ -976,5 +974,7 @@
   "Anulowano połączenie": "Connection cancelled",
   "Program zainstalowano z paczki Arch Linux – pobierz nową paczkę .pkg.tar.zst ze strony wydań i zainstaluj ją poleceniem „sudo pacman -U …” (paczkę z AUR zaktualizuj swoim pomocnikiem AUR). Dane i ustawienia zostaną zachowane.": "Installed from an Arch Linux package – download the new .pkg.tar.zst package from the releases page and install it with “sudo pacman -U …” (update an AUR package with your AUR helper). Your data and settings are kept.",
   "Rozdzielczość: {width} × {height}, skalowanie {scale}%": "Resolution: {width} × {height}, scaling {scale}%",
-  "Sesja RDP aktywna ({width} × {height}, skalowanie {scale}%)": "RDP session active ({width} × {height}, scaling {scale}%)"
+  "Sesja RDP aktywna ({width} × {height}, skalowanie {scale}%)": "RDP session active ({width} × {height}, scaling {scale}%)",
+  "Hasło sesji „{title}” skopiowano do schowka – zniknie z niego za 30 s.": "The password of “{title}” was copied to the clipboard – it will be cleared in 30 s.",
+  "Skopiowano hasło do schowka – zniknie z niego za 30 s.": "Password copied to the clipboard – it will be cleared in 30 s."
 }

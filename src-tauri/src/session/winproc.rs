@@ -49,6 +49,30 @@ mod imp {
         let _ = clipboard_win::set_clipboard_string(text);
     }
 
+    /// Text that is a password: marked so that Windows keeps it out of the clipboard history
+    /// (Win+V) and cloud clipboard sync, and clipboard monitors ignore it (the formats password
+    /// managers use; older Windows versions simply ignore them).
+    pub fn clipboard_set_secret(text: &str) -> Result<(), String> {
+        let _clip = clipboard_win::Clipboard::new_attempts(10)
+            .map_err(|e| tr!("Nie można otworzyć schowka: {:?}", "Cannot open the clipboard: {:?}", e))?;
+        clipboard_win::raw::set_string_with(text, clipboard_win::options::DoClear)
+            .map_err(|e| tr!("Nie można zapisać tekstu w schowku: {:?}", "Cannot put the text on the clipboard: {:?}", e))?;
+        let zero = 0u32.to_le_bytes();
+        for name in ["ExcludeClipboardContentFromMonitorProcessing", "CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"] {
+            if let Some(fmt) = clipboard_win::raw::register_format(name) {
+                let _ = clipboard_win::raw::set_without_clear(fmt.get(), &zero);
+            }
+        }
+        Ok(())
+    }
+
+    /// Empties the clipboard.
+    pub fn clipboard_clear() {
+        if let Ok(_clip) = clipboard_win::Clipboard::new_attempts(10) {
+            let _ = clipboard_win::raw::empty();
+        }
+    }
+
     /// Replaces the clipboard content with a file list (CF_HDROP) + "Preferred DropEffect = copy",
     /// so Explorer pastes (copies) the files.
     pub fn clipboard_set_files(paths: &[String]) -> Result<(), String> {

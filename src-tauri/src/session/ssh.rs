@@ -16,7 +16,7 @@ impl std::fmt::Debug for HostKeyVerifier {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SshConnectionConfig {
     pub auth_type: String,
     pub certificate: Option<String>,
@@ -28,6 +28,28 @@ pub struct SshConnectionConfig {
     pub passphrase: Option<String>,
     /// Mandatory: the server's host key is verified BEFORE any credentials are sent.
     pub host_key_verifier: HostKeyVerifier,
+}
+
+/// Secrets are wiped from memory when a config (or any clone of it) is dropped.
+impl Drop for SshConnectionConfig {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        for secret in [&mut self.password, &mut self.private_key, &mut self.passphrase].into_iter().flatten() {
+            secret.zeroize();
+        }
+    }
+}
+
+/// Never prints the secrets.
+impl std::fmt::Debug for SshConnectionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConnectionConfig")
+            .field("auth_type", &self.auth_type)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .finish_non_exhaustive()
+    }
 }
 
 pub enum SshWorkerCommand {
@@ -238,7 +260,13 @@ pub fn ssh_connect_raw(config: &SshConnectionConfig) -> Result<ssh2::Session, St
                 .map_err(|e| tr!("Nie można przygotować certyfikatu SSH: {}", "Cannot prepare the SSH certificate: {}", e))?;
             let key_path = std::path::Path::new(trimmed);
             let is_path = !trimmed.contains('\n') && key_path.is_file();
-            let file_text = if is_path { std::fs::read_to_string(key_path).ok().map(zeroize::Zeroizing::new) } else { None };
+            // A one-line value naming an existing file: read with the same checks as a picked key
+            // file (size limit, private key header) – never any other file
+            let file_text = if is_path {
+                Some(crate::session::read_private_key_file(key_path).map(zeroize::Zeroizing::new)?)
+            } else {
+                None
+            };
             let key_text: &str = file_text.as_deref().map(String::as_str).unwrap_or(key_content);
             if let Some(msg) = crate::session::ssh_keyauth::unsupported_format_message(key_text) {
                 return Err(msg);

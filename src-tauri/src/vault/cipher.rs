@@ -95,9 +95,13 @@ pub fn decrypt_string(key: &[u8; 32], payload_base64: &str) -> Result<String, St
     nonce.copy_from_slice(&bytes[0..12]);
     let ciphertext = &bytes[12..];
 
-    let plaintext_bytes = Zeroizing::new(decrypt_bytes(key, ciphertext, &nonce)?);
-    String::from_utf8(plaintext_bytes.to_vec())
-        .map_err(|e| tr!("Odszyfrowana zawartość nie jest poprawnym ciągiem UTF-8: {}", "The decrypted content is not valid UTF-8: {}", e))
+    // The plaintext buffer becomes the String itself (no extra copy left behind in memory)
+    String::from_utf8(decrypt_bytes(key, ciphertext, &nonce)?).map_err(|e| {
+        let msg = tr!("Odszyfrowana zawartość nie jest poprawnym ciągiem UTF-8: {}", "The decrypted content is not valid UTF-8: {}", e.utf8_error());
+        let mut bytes = e.into_bytes();
+        zeroize::Zeroize::zeroize(&mut bytes);
+        msg
+    })
 }
 
 /// Same as [`decrypt_string`], but the result is wiped from memory when dropped.

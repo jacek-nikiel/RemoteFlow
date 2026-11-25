@@ -290,10 +290,10 @@ export const TabBar: React.FC<Props> = ({
         return;
       }
 
-      await api.clipboardWriteText(password);
+      await api.clipboardWriteSecret(password);
       setCopiedSessionId(session.sessionId);
       setCopyToast({
-        message: t('Hasło sesji „{title}” zostało skopiowane do schowka!', { title: session.title }),
+        message: t('Hasło sesji „{title}” skopiowano do schowka – zniknie z niego za 30 s.', { title: session.title }),
         type: 'success',
       });
       setTimeout(() => setCopiedSessionId(null), 2500);

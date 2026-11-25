@@ -18,7 +18,7 @@ use auth::{
     vault_unlock_master, vault_unlock_pin, vault_update_security_settings, AuthManager,
 };
 use session::{
-    app_exit, app_maximize_window, clipboard_read_files, clipboard_read_text, clipboard_write_text,
+    app_exit, app_maximize_window, clipboard_read_files, clipboard_read_text, clipboard_write_secret, clipboard_write_text,
     local_list_dir, open_shared_folder, pick_local_folder, pick_private_key_file, pick_ssh_certificate_file,
     read_local_paths_for_rdp_clipboard, save_dropped_file_to_shared, session_close,
     session_connect, session_launch_external_rdp, session_rdp_password, session_resize,
@@ -114,6 +114,7 @@ pub fn run() {
             save_dropped_file_to_shared,
             clipboard_read_text,
             clipboard_write_text,
+            clipboard_write_secret,
             clipboard_read_files,
             local_list_dir,
             pick_local_folder,

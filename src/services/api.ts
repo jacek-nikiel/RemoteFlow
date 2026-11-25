@@ -863,19 +863,23 @@ export const api = {
     return targetDir || '~/Downloads';
   },
 
+  /**
+   * Saves a file in the connection's exchange folder (from the vault – the folder is never passed
+   * from here) or, without a connection, in the downloads folder.
+   */
   async saveDroppedFileToShared(
     filename: string,
     contentBase64: string,
-    targetDir?: string
+    connectionId?: string
   ): Promise<string> {
     if (isTauri()) {
       return await invoke<string>('save_dropped_file_to_shared', {
         filename,
         contentBase64,
-        targetDir: targetDir || null,
+        connectionId: connectionId || null,
       });
     }
-    return `${targetDir || '~/Downloads'}/${filename}`;
+    return `~/Downloads/${filename}`;
   },
 
   async clipboardReadText(): Promise<string> {
@@ -892,6 +896,19 @@ export const api = {
     } catch {
       return '';
     }
+  },
+
+  /**
+   * Copies a password: kept out of the Windows clipboard history / cloud sync and cleared after
+   * 30 s if still there (backend). In the app the browser clipboard is not used – it would put
+   * the password back as plain text.
+   */
+  async clipboardWriteSecret(text: string): Promise<void> {
+    if (isTauri()) {
+      await invoke<void>('clipboard_write_secret', { text });
+      return;
+    }
+    await navigator.clipboard.writeText(text);
   },
 
   async clipboardWriteText(text: string): Promise<void> {

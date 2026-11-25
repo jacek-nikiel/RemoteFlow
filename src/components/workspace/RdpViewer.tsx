@@ -695,7 +695,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
         }
         const b64 = btoa(binary);
         const relName = fileInfo.path ? `${fileInfo.path}\\${fileInfo.name}` : fileInfo.name;
-        await api.saveDroppedFileToShared(relName, b64, exchangeDir);
+        await api.saveDroppedFileToShared(relName, b64, session.connectionId);
         savedCount++;
       }
 
@@ -1556,10 +1556,10 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
     try {
       const pwd = await api.revealPassword(session.connectionId);
       if (pwd) {
-        await api.clipboardWriteText(pwd);
+        await api.clipboardWriteSecret(pwd);
         await handleSendCustomTextToRemote(pwd, false);
         setCopiedPassword(true);
-        showToast(t('Skopiowano hasło do schowka!'), 2000);
+        showToast(t('Skopiowano hasło do schowka – zniknie z niego za 30 s.'), 2500);
         setTimeout(() => setCopiedPassword(false), 2000);
       } else {
         showToast(t('Brak zapisanego hasła dla tej sesji'), 2500);
@@ -1606,9 +1606,14 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
   // Download standard Microsoft .rdp file
   const handleDownloadRdp = () => {
     const dim = getDimensionsForPreset(selectedResolution, containerRef.current, session.rdpSettings);
+    // Values come from the vault (possibly from an imported file): a line break would add
+    // settings of its own to the .rdp file (e.g. drive redirection), so it is removed
+    const clean = (v: string | undefined) => (v ?? '').replace(/[\r\n]/g, '');
+    const login = session.rdpDomain ? `${clean(session.rdpDomain)}\\${clean(session.username)}` : clean(session.username);
     const rdpContent = [
-      `full address:s:${session.host}:${session.port}`,
-      `username:s:${session.rdpDomain ? `${session.rdpDomain}\\${session.username}` : session.username}`,
+      // IPv6 in brackets: [::1]:3389
+      `full address:s:${hostPort(clean(session.host), session.port)}`,
+      `username:s:${login}`,
       `screen mode id:i:2`,
       `use multimon:i:1`,
       `desktopwidth:i:${dim.width}`,
@@ -1620,6 +1625,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
       `redirectclipboard:i:${clipboardAllowed ? 1 : 0}`,
       // Local drives are never shared with the server (it would get access to all local files)
       `redirectdrives:i:0`,
+      `drivestoredirect:s:`,
       `redirectprinters:i:0`,
       `displayconnectionbar:i:1`,
       `autoreconnection enabled:i:1`,
