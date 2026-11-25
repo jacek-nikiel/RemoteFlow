@@ -43,6 +43,7 @@ import { ConfirmDialog } from '../dialogs/ConfirmDialog';
 // Loaded on first use (CodeMirror is a large part of the bundle)
 const FilePreview = React.lazy(() => import('./FilePreview').then((m) => ({ default: m.FilePreview })));
 import { locale, tn, useT } from '../../i18n';
+import { formatBytes } from '../../utils/formatBytes';
 import { useMenuPosition } from '../../utils/useMenuPosition';
 
 type Side = 'local' | 'remote';
@@ -90,15 +91,23 @@ interface Props {
   onNotify?: (msg: string) => void;
   /** true = split workspace: use the whole pane; false = full-screen session: half of it. */
   fullWidth: boolean;
+  /**
+   * A transfer started / progressed / ended (null). It keeps running when the window is closed,
+   * so the terminal shows it on its "Files (SFTP)" button.
+   */
+  onTransferChange?: (transfer: SftpTransferInfo | null) => void;
+  /** A transfer ended: the summary shown in the status bar and whether it went fully well. */
+  onTransferDone?: (text: string, ok: boolean) => void;
 }
 
-const formatBytes = (bytes: number): string => {
-  if (!bytes) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-};
+/** Running transfer as shown outside the window. */
+export interface SftpTransferInfo {
+  label: string;
+  files: number;
+  current: string | null;
+  bytes: number;
+  cancelling: boolean;
+}
 
 /** Compact modification time for the list (e.g. 23.10.26, 14:05); full date with seconds in the tooltip. */
 const formatDate = (secs: number): string =>
@@ -154,6 +163,8 @@ export const SftpManager: React.FC<Props> = ({
   terminalSessionId,
   onNotify,
   fullWidth,
+  onTransferChange,
+  onTransferDone,
 }) => {
   const t = useT();
   const [local, setLocal] = useState<PaneState>(emptyPane);
@@ -342,6 +353,20 @@ export const SftpManager: React.FC<Props> = ({
     };
   }, []);
 
+  // Report the running transfer to the terminal (it keeps going when the window is closed)
+  const onTransferChangeRef = useRef(onTransferChange);
+  onTransferChangeRef.current = onTransferChange;
+  const onTransferDoneRef = useRef(onTransferDone);
+  onTransferDoneRef.current = onTransferDone;
+  useEffect(() => {
+    onTransferChangeRef.current?.(
+      busy
+        ? { label: busy, files: progress?.files ?? 0, current: progress?.current || null, bytes: progress?.bytes ?? 0, cancelling }
+        : null
+    );
+  }, [busy, progress, cancelling]);
+  useEffect(() => () => onTransferChangeRef.current?.(null), []);
+
   // --- Transfers --------------------------------------------------------------------------------
   const runTransfer = useCallback(
     async (from: Side, paths: string[], targetDir: string) => {
@@ -380,11 +405,14 @@ export const SftpManager: React.FC<Props> = ({
           (sum.failed ? t('. Błędy: {failed} – {p1}', { failed: sum.failed, p1: sum.errors.join('; ') }) : '');
         showStatus(text, sum.failed || sum.cancelled ? 'error' : 'ok');
         onNotify?.(text);
+        onTransferDoneRef.current?.(text, !(sum.failed || sum.cancelled));
         if (from === 'local') loadRemote(remote.path === targetDir ? targetDir : remote.path);
         else loadLocal(local.path === targetDir ? targetDir : local.path);
         setters[from]((p) => ({ ...p, selected: [], anchor: null }));
       } catch (err: any) {
-        showStatus(t('Błąd transferu: {p0}', { p0: err?.message || err }), 'error');
+        const text = t('Błąd transferu: {p0}', { p0: err?.message || err });
+        showStatus(text, 'error');
+        onTransferDoneRef.current?.(text, false);
       } finally {
         busyRef.current = null;
         setBusy(null);

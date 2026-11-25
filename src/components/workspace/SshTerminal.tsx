@@ -11,6 +11,7 @@ import {
   Eraser,
   Loader2,
   ArrowRightLeft,
+  AlertTriangle,
 } from 'lucide-react';
 import { api, isTauri } from '../../services/api';
 import { SessionInfo } from '../../types';
@@ -21,7 +22,8 @@ import {
   TERMINAL_RESTORE_AFTER_DISCONNECT,
   terminalScrollback,
 } from '../../utils/terminalSettings';
-import { SftpManager } from './SftpManager';
+import { SftpManager, SftpTransferInfo } from './SftpManager';
+import { formatBytes } from '../../utils/formatBytes';
 import { tn, useT } from '../../i18n';
 import { useLightTerminal } from '../../theme';
 import { useMenuPosition } from '../../utils/useMenuPosition';
@@ -97,6 +99,24 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
   const fitAddonRef = useRef<FitAddon | null>(null);
 
   const [isSftpOpen, setIsSftpOpen] = useState(false);
+  // Transfer of the SFTP window – it continues in the background when the window is closed
+  const [sftpTransfer, setSftpTransfer] = useState<SftpTransferInfo | null>(null);
+  // Result of a transfer that ended while the window was closed – shown on the button until the
+  // window is opened (or for a while), so a finished background copy is not missed
+  const [sftpResult, setSftpResult] = useState<{ text: string; ok: boolean } | null>(null);
+  const isSftpOpenRef = useRef(isSftpOpen);
+  isSftpOpenRef.current = isSftpOpen;
+  const onSftpTransferDone = useCallback((text: string, ok: boolean) => {
+    if (!isSftpOpenRef.current) setSftpResult({ text, ok });
+  }, []);
+  useEffect(() => {
+    if (isSftpOpen) setSftpResult(null);
+  }, [isSftpOpen]);
+  useEffect(() => {
+    if (!sftpResult) return;
+    const id = setTimeout(() => setSftpResult(null), sftpResult.ok ? 30000 : 120000);
+    return () => clearTimeout(id);
+  }, [sftpResult]);
   const [isTunnelsOpen, setIsTunnelsOpen] = useState(false);
   const tunnelsButtonRef = useRef<HTMLButtonElement>(null);
   const closeTunnels = useCallback(() => {
@@ -679,15 +699,52 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
         {/* Toggle SFTP File Explorer Drawer */}
         <button
           onClick={() => setIsSftpOpen((v) => !v)}
-          title={t('Menedżer transferu plików i katalogów (SFTP)')}
+          title={
+            sftpTransfer
+              ? [
+                  sftpTransfer.cancelling ? t('Przerywanie… ') + sftpTransfer.label : sftpTransfer.label,
+                  sftpTransfer.current ? t('Teraz: {current}', { current: sftpTransfer.current }) : '',
+                  t('Przesłano: {size}, gotowych plików: {files}', {
+                    size: formatBytes(sftpTransfer.bytes),
+                    files: sftpTransfer.files,
+                  }),
+                  isSftpOpen ? '' : t('Kliknij, aby zobaczyć postęp lub przerwać.'),
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              : sftpResult
+                ? sftpResult.text
+                : t('Menedżer transferu plików i katalogów (SFTP)')
+          }
           className={`flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors shadow-sm ${
-            isSftpOpen
-              ? 'border-cyan-500 bg-cyan-950/80 text-cyan-200 shadow-cyan-950/50'
-              : 'border-slate-700/80 bg-slate-900/90 text-slate-200 hover:bg-slate-700 hover:text-white'
+            sftpTransfer && !isSftpOpen
+              ? 'border-amber-400 bg-amber-950/80 text-amber-100 shadow-amber-950/50 hover:bg-amber-900/80'
+              : sftpResult
+                ? sftpResult.ok
+                  ? 'border-emerald-500 bg-emerald-950/80 text-emerald-100 hover:bg-emerald-900/80'
+                  : 'border-red-500 bg-red-950/80 text-red-100 hover:bg-red-900/80'
+                : isSftpOpen
+                ? 'border-cyan-500 bg-cyan-950/80 text-cyan-200 shadow-cyan-950/50'
+                : 'border-slate-700/80 bg-slate-900/90 text-slate-200 hover:bg-slate-700 hover:text-white'
           }`}
         >
-          <FolderUp className="h-3.5 w-3.5 text-amber-400" />
+          {sftpTransfer ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />
+          ) : sftpResult ? (
+            sftpResult.ok ? (
+              <Check className="h-3.5 w-3.5 text-emerald-400" />
+            ) : (
+              <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+            )
+          ) : (
+            <FolderUp className="h-3.5 w-3.5 text-amber-400" />
+          )}
           <span>{t('Pliki (SFTP)')}</span>
+          {sftpTransfer && (
+            <span className="font-mono text-[10px] text-amber-200/90">
+              {sftpTransfer.bytes > 0 ? formatBytes(sftpTransfer.bytes) : t('trwa…')}
+            </span>
+          )}
         </button>
       </div>
 
@@ -778,6 +835,8 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
         terminalSessionId={session.sessionId}
         onNotify={showNotification}
         fullWidth={splitLayout}
+        onTransferChange={setSftpTransfer}
+        onTransferDone={onSftpTransferDone}
       />
 
       {isTunnelsOpen && (

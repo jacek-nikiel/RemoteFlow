@@ -1009,5 +1009,9 @@
   "Otwórz w przeglądarce": "Open in browser",
   "Tunele zmienisz w ustawieniach połączenia (zakładka „Tunele SSH”) – zmiany działają po ponownym połączeniu.": "Change the tunnels in the connection settings (\"SSH tunnels\" tab) – changes take effect after reconnecting.",
   "Pokaż tunele SSH tego połączenia": "Show the SSH tunnels of this connection",
-  "Aktywne tunele portów: {list}": "Active port tunnels: {list}"
+  "Aktywne tunele portów: {list}": "Active port tunnels: {list}",
+  "Teraz: {current}": "Now: {current}",
+  "Przesłano: {size}, gotowych plików: {files}": "Transferred: {size}, files done: {files}",
+  "Kliknij, aby zobaczyć postęp lub przerwać.": "Click to see the progress or cancel.",
+  "trwa…": "running…"
 }
