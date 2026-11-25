@@ -103,24 +103,23 @@ export const ImportExportModal: React.FC<Props> = ({
         exportScope.includeUngrouped
       );
       
-      // Trigger download
-      const blob = new Blob([payloadString], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      // Saved where the user chooses ("Save as" dialog)
       const dateStr = new Date().toISOString().split('T')[0];
-      a.href = url;
-      a.download = exportEncrypted
-        ? `remoteflow-export-encrypted-${dateStr}.rfvault`
-        : `remoteflow-export-plain-${dateStr}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const savedPath = await api.saveFileAs(
+        exportEncrypted ? `remoteflow-export-encrypted-${dateStr}.rfvault` : `remoteflow-export-plain-${dateStr}.json`,
+        payloadString,
+        exportEncrypted ? t('Zaszyfrowany eksport RemoteFlow') : t('Jawny eksport RemoteFlow (JSON)'),
+        exportEncrypted ? 'rfvault' : 'json'
+      );
+      if (!savedPath) {
+        // Cancelled in the dialog – nothing was written
+        return;
+      }
 
       setMessage({
         text: exportEncrypted
-          ? t('Zaszyfrowany plik eksportu (.rfvault) został pomyślnie wygenerowany i pobrany!')
-          : t('Jawny plik eksportu (.json) został pomyślnie pobrany!'),
+          ? t('Zapisano zaszyfrowany plik eksportu: {path}', { path: savedPath })
+          : t('Zapisano jawny plik eksportu: {path}', { path: savedPath }),
         type: 'success',
       });
       setExportPassword('');
@@ -472,7 +471,7 @@ export const ImportExportModal: React.FC<Props> = ({
                 ) : (
                   <>
                     <Download className="h-4 w-4" />
-                    {t('Pobierz plik eksportu ({ext})', { ext: exportEncrypted ? '.rfvault' : '.json' })}
+                    {t('Zapisz plik eksportu ({ext})…', { ext: exportEncrypted ? '.rfvault' : '.json' })}
                   </>
                 )}
               </button>

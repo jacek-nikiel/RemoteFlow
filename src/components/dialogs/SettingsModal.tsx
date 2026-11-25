@@ -31,7 +31,7 @@ import {
 import { api } from '../../services/api';
 import { BackupEntry, BackupSettings, KnownHostEntry, UiSettings, VaultStatus } from '../../types';
 import { ConfirmDialog } from './ConfirmDialog';
-import { locale, useT } from '../../i18n';
+import { locale, tn, useT } from '../../i18n';
 import { LanguageSegmented } from '../../i18n/LanguageSwitcher';
 import { LinuxRdpClientSetting, LinuxRenderingSetting, TerminalDarkToggle, ThemeSegmented } from '../../theme/ThemeSwitcher';
 
@@ -667,7 +667,7 @@ export const SettingsModal: React.FC<Props> = ({
                   >
                     {[3, 5, 10, 20, 50].map((n) => (
                       <option key={n} value={n}>
-                        {n} ostatnich
+                        {tn(n, ['{n} ostatnia', '{n} ostatnie', '{n} ostatnich'], { n })}
                       </option>
                     ))}
                   </select>

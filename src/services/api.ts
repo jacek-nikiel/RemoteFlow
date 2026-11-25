@@ -911,6 +911,25 @@ export const api = {
     await navigator.clipboard.writeText(text);
   },
 
+  /**
+   * Saves a file where the user chooses in the native "Save as" dialog. Returns the path, or null
+   * when cancelled. Outside the app (browser preview) falls back to a regular download.
+   */
+  async saveFileAs(defaultName: string, content: string, filterName: string, extension: string): Promise<string | null> {
+    if (isTauri()) {
+      return await invoke<string | null>('save_file_as', { defaultName, content, filterName, extension });
+    }
+    const url = URL.createObjectURL(new Blob([content], { type: 'application/octet-stream' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = defaultName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return defaultName;
+  },
+
   async clipboardWriteText(text: string): Promise<void> {
     if (isTauri()) {
       try {

@@ -18,6 +18,9 @@ Security hardening after an external code review (none of these could be used fr
 - **Downloaded .rdp file:** line breaks are removed from the host, user name and domain (an imported connection could otherwise add its own settings to the file), IPv6 addresses are written in brackets, no drive is shared.
 - **Key files** set in a connection or credential (possibly from an imported file) are read only when they look like a private key and are at most 64 KB – the same checks as a key picked in the dialog.
 - **Secrets in memory:** decrypted passwords and keys of SSH/RDP connections are wiped from memory when no longer needed (also after an encrypted export), and connection settings never print them in logs.
+- **Export and .rdp file: "Save as" dialog.** The vault export (`.rfvault` / `.json`) and the `.rdp` file of an RDP session are saved where you choose in the system "Save as" dialog, and the message shows the full path. Before, they went silently to the downloads folder (also a plain export with passwords in clear text). On Unix the file is owner-only; the program's own data cannot be overwritten this way. Linux without zenity/kdialog: saved in the downloads folder (or the home folder) under a free name.
+- **Connection editor: numbers limited to their range.** A port (also of SSH tunnels) cannot be typed above 65535, the RDP width/height above 8192; an empty or too small value is reported when saving instead of an error about "u16". Before, e.g. port 5559595959 failed with a technical message.
+- Settings → vault backups: the number of kept backups ("10 ostatnich") was shown in Polish in the English interface.
 - **Vault reset:** the copy of the old vault gets a unique name (milliseconds, plus a counter), so two resets close together can never overwrite it. A custom backup folder is created owner-only and only after the vault is unlocked.
 
 ## 1.16.1 – Sharp RDP picture with display scaling

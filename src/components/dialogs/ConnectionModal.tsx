@@ -28,6 +28,7 @@ import {
 } from '../../types';
 import { normalizeRdpIdentity, rdpLoginLabel } from '../../utils/rdpIdentity';
 import { useT } from '../../i18n';
+import { clampTyped, isValidPort, isValidRdpSize, MAX_PORT, MAX_RDP_SIZE, MIN_RDP_SIZE } from '../../utils/numberInput';
 
 interface Props {
   isOpen: boolean;
@@ -368,6 +369,21 @@ export const ConnectionModal: React.FC<Props> = ({
       setActiveTab('general');
       return;
     }
+    if (!isValidPort(port)) {
+      setError(t('Port musi być liczbą od 1 do {max}', { max: MAX_PORT }));
+      setActiveTab('general');
+      return;
+    }
+    if (protocol === 'ssh' && portForwarding.some((r) => !isValidPort(r.localPort) || (r.forwardType !== 'dynamic' && !isValidPort(r.remotePort ?? 80)))) {
+      setError(t('Porty tuneli SSH muszą być liczbami od 1 do {max}', { max: MAX_PORT }));
+      setActiveTab('tunnels');
+      return;
+    }
+    if (protocol === 'rdp' && (!isValidRdpSize(rdpWidth) || !isValidRdpSize(rdpHeight))) {
+      setError(t('Rozdzielczość RDP: szerokość i wysokość od {min} do {max} pikseli', { min: MIN_RDP_SIZE, max: MAX_RDP_SIZE }));
+      setActiveTab('rdp');
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -379,7 +395,7 @@ export const ConnectionModal: React.FC<Props> = ({
         credentialId: credentialId || undefined,
         protocol,
         host: host.trim(),
-        port: Number(port) || (protocol === 'ssh' ? 22 : 3389),
+        port,
         username: username.trim(),
         passwordEncrypted: editingConnection ? editingConnection.passwordEncrypted : undefined,
         sshAuthType,
@@ -700,8 +716,11 @@ export const ConnectionModal: React.FC<Props> = ({
                     </label>
                     <input
                       type="number"
-                      value={port}
-                      onChange={(e) => setPort(Number(e.target.value))}
+                      min={1}
+                      max={MAX_PORT}
+                      step={1}
+                      value={port || ''}
+                      onChange={(e) => setPort(clampTyped(e.target.value, MAX_PORT))}
                       className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-white focus:border-cyan-500 focus:outline-none"
                     />
                   </div>
@@ -1411,8 +1430,11 @@ export const ConnectionModal: React.FC<Props> = ({
                           </span>
                           <input
                             type="number"
-                            value={rule.localPort}
-                            onChange={(e) => updatePortForwardRule(rule.id, { localPort: Number(e.target.value) })}
+                            min={1}
+                            max={MAX_PORT}
+                            step={1}
+                            value={rule.localPort || ''}
+                            onChange={(e) => updatePortForwardRule(rule.id, { localPort: clampTyped(e.target.value, MAX_PORT) })}
                             className="w-20 rounded border border-slate-700 bg-slate-800 px-2 py-1 font-mono text-xs text-white"
                           />
                         </div>
@@ -1442,8 +1464,11 @@ export const ConnectionModal: React.FC<Props> = ({
                               <span className="text-slate-500">:</span>
                               <input
                                 type="number"
-                                value={rule.remotePort || 80}
-                                onChange={(e) => updatePortForwardRule(rule.id, { remotePort: Number(e.target.value) })}
+                                min={1}
+                                max={MAX_PORT}
+                                step={1}
+                                value={rule.remotePort === undefined ? 80 : rule.remotePort || ''}
+                                onChange={(e) => updatePortForwardRule(rule.id, { remotePort: clampTyped(e.target.value, MAX_PORT) })}
                                 className="w-20 rounded border border-slate-700 bg-slate-800 px-2 py-1 font-mono text-xs text-white"
                               />
                             </div>
@@ -1480,8 +1505,11 @@ export const ConnectionModal: React.FC<Props> = ({
                     </label>
                     <input
                       type="number"
-                      value={rdpWidth}
-                      onChange={(e) => setRdpWidth(Number(e.target.value))}
+                      min={MIN_RDP_SIZE}
+                      max={MAX_RDP_SIZE}
+                      step={1}
+                      value={rdpWidth || ''}
+                      onChange={(e) => setRdpWidth(clampTyped(e.target.value, MAX_RDP_SIZE))}
                       className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-white focus:border-cyan-500 focus:outline-none"
                     />
                   </div>
@@ -1491,8 +1519,11 @@ export const ConnectionModal: React.FC<Props> = ({
                     </label>
                     <input
                       type="number"
-                      value={rdpHeight}
-                      onChange={(e) => setRdpHeight(Number(e.target.value))}
+                      min={MIN_RDP_SIZE}
+                      max={MAX_RDP_SIZE}
+                      step={1}
+                      value={rdpHeight || ''}
+                      onChange={(e) => setRdpHeight(clampTyped(e.target.value, MAX_RDP_SIZE))}
                       className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-white focus:border-cyan-500 focus:outline-none"
                     />
                   </div>

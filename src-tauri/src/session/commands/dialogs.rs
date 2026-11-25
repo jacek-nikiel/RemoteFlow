@@ -130,6 +130,123 @@ fn pick_file_dialog(title: Option<String>) -> Result<Option<String>, String> {
     }
 }
 
+/// Native "Save as" dialog (blocking). `None` = cancelled. Without a dialog program on Linux
+/// (zenity / kdialog) the file goes to the downloads folder under a free name.
+fn save_file_dialog(title: &str, default_name: &str, filter_name: &str, extension: &str) -> Result<Option<std::path::PathBuf>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let q = |v: &str| v.replace('\'', "''");
+        let script = format!(
+            "{} $f = New-Object System.Windows.Forms.SaveFileDialog; $f.Title = '{}'; $f.FileName = '{}'; \
+             $f.Filter = '{} (*.{ext})|*.{ext}|{} (*.*)|*.*'; $f.DefaultExt = '{ext}'; $f.AddExtension = $true; $f.OverwritePrompt = $true; \
+             if ($f.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $f.FileName }}",
+            winproc::DIALOG_PRELUDE,
+            q(title),
+            q(default_name),
+            q(filter_name),
+            q(tr!("Wszystkie pliki", "All files")),
+            ext = extension
+        );
+        let chosen = winproc::powershell(&script).map(|o| o.trim().to_string()).filter(|s| !s.is_empty());
+        return Ok(chosen.map(std::path::PathBuf::from));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let start_dir = dirs::document_dir().or_else(dirs::home_dir).unwrap_or_else(|| std::path::PathBuf::from("/"));
+        let start = start_dir.join(default_name);
+        let pattern = format!("*.{extension}");
+        let finish = |out: std::process::Output| -> Option<std::path::PathBuf> {
+            if !out.status.success() {
+                return None;
+            }
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if s.is_empty() {
+                return None;
+            }
+            let mut p = std::path::PathBuf::from(s);
+            if p.extension().is_none() {
+                p.set_extension(extension);
+            }
+            Some(p)
+        };
+
+        if let Ok(out) = std::process::Command::new("kdialog")
+            .arg("--getsavefilename")
+            .arg(&start)
+            .arg(format!("{pattern}|{filter_name}"))
+            .arg("--title")
+            .arg(title)
+            .output()
+        {
+            return Ok(finish(out));
+        }
+        if let Ok(out) = std::process::Command::new("zenity")
+            .arg("--file-selection")
+            .arg("--save")
+            .arg(format!("--title={title}"))
+            .arg(format!("--filename={}", start.display()))
+            .arg(format!("--file-filter={filter_name} | {pattern}"))
+            .output()
+        {
+            return Ok(finish(out));
+        }
+
+        // No dialog program: the downloads folder, never overwriting an existing file
+        let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or_else(|| {
+            tr!("Nie znaleziono okna zapisu (zainstaluj zenity lub kdialog)", "No save dialog found (install zenity or kdialog)").to_string()
+        })?;
+        let stem = std::path::Path::new(default_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let mut candidate = dir.join(default_name);
+        let mut n = 1;
+        while candidate.exists() {
+            candidate = dir.join(format!("{stem} ({n}).{extension}"));
+            n += 1;
+        }
+        Ok(Some(candidate))
+    }
+}
+
+/// Saves a file the user exports (vault export, .rdp file) where they choose in the native
+/// "Save as" dialog; returns the path, `None` when cancelled. The program's own data (vault,
+/// backups) cannot be overwritten this way. Written owner-only on Unix – an export may hold
+/// passwords in plain text.
+#[tauri::command]
+pub async fn save_file_as(
+    default_name: String,
+    content: String,
+    filter_name: String,
+    extension: String,
+    auth_state: tauri::State<'_, crate::auth::AuthState>,
+) -> Result<Option<String>, String> {
+    let access = crate::session::localfs::local_access(&auth_state)?;
+    let extension: String = extension.chars().filter(|c| c.is_ascii_alphanumeric()).take(16).collect();
+    let default_name: String = default_name.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '\0')).collect();
+    let content = zeroize::Zeroizing::new(content);
+    tokio::task::spawn_blocking(move || {
+        let title = tr!("Zapisz plik", "Save file");
+        let Some(path) = save_file_dialog(title, &default_name, &filter_name, &extension)? else {
+            return Ok(None);
+        };
+        access.check(&path)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts
+            .open(&path)
+            .map_err(|e| tr!("Nie można zapisać pliku '{}': {}", "Cannot save the file '{}': {}", path.display(), e))?;
+        std::io::Write::write_all(&mut file, content.as_bytes())
+            .map_err(|e| tr!("Nie można zapisać pliku '{}': {}", "Cannot save the file '{}': {}", path.display(), e))?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 pub struct PickedKeyFile {
     pub path: String,

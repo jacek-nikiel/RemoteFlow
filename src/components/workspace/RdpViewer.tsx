@@ -1634,15 +1634,12 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
       `prompt for credentials:i:0`,
     ].join('\r\n');
 
-    const blob = new Blob([rdpContent], { type: 'application/x-rdp' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${session.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.rdp`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    api
+      .saveFileAs(`${session.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.rdp`, rdpContent, t('Plik połączenia pulpitu zdalnego'), 'rdp')
+      .then((path) => {
+        if (path) showToast(t('Zapisano plik .rdp: {path}', { path }), 4000);
+      })
+      .catch((err: any) => showToast(t('Nie udało się zapisać pliku .rdp: {p0}', { p0: err?.message || err }), 5000));
   };
 
   // Handle tab visibility changes without unmounting
@@ -2908,7 +2905,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
                 className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
               >
                 <Download className="h-3.5 w-3.5" />
-                <span>{t('Pobierz .rdp')}</span>
+                <span>{t('Zapisz .rdp…')}</span>
               </button>
             </div>
           </div>
