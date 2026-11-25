@@ -41,6 +41,42 @@ const BIND_RETRY_FOR: Duration = Duration::from_millis(1500);
 /// Message for the terminal of the session (tunnel status / errors).
 pub type Notify = Arc<dyn Fn(String) + Send + Sync>;
 
+/// One tunnel as shown in the tunnels window of the session.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelInfo {
+    /// "local" (-L), "remote" (-R) or "dynamic" (-D SOCKS5)
+    pub kind: String,
+    /// Port listened on: on this computer (-L, -D) or on the server (-R).
+    pub port: u16,
+    /// Target "host:port" (-L: reached by the server, -R: reached by this computer); none for -D.
+    pub target: Option<String>,
+    /// "active" (listening), "waiting" (-R: until the server connection is up) or "error"
+    pub state: String,
+    pub error: Option<String>,
+    /// Forwarded connections open right now.
+    pub connections: usize,
+}
+
+/// Tunnels of one SSH session – read by the `get_session_tunnels` command.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelsStatus {
+    /// The SSH connection that carries the tunnels is up (it is opened at start and again on use).
+    pub connected: bool,
+    /// Why the tunnel connection is down (last error).
+    pub error: Option<String>,
+    pub tunnels: Vec<TunnelInfo>,
+}
+
+type SharedStatus = Arc<Mutex<TunnelsStatus>>;
+
+fn update_status(status: &SharedStatus, f: impl FnOnce(&mut TunnelsStatus)) {
+    if let Ok(mut s) = status.lock() {
+        f(&mut s);
+    }
+}
+
 pub struct TunnelHandle {
     shutdown_flag: Arc<AtomicBool>,
     /// Local -L / -D listeners, shared with the worker so that closing the session frees the
@@ -51,9 +87,14 @@ pub struct TunnelHandle {
     /// Local ports bound by this session and the tab title (for messages in other tabs).
     pub ports: Vec<u16>,
     pub title: String,
+    status: SharedStatus,
 }
 
 impl TunnelHandle {
+    pub fn status(&self) -> Option<TunnelsStatus> {
+        self.status.lock().ok().map(|s| s.clone())
+    }
+
     pub fn shutdown(&self) {
         self.shutdown_flag.store(true, Ordering::SeqCst);
         if let Ok(mut l) = self.listeners.lock() {
@@ -120,7 +161,10 @@ pub fn start_tunnels(
     // Local listeners are bound right away, so a busy port is reported immediately.
     let mut listeners = Vec::new();
     let mut remote_rules = Vec::new();
+    let mut infos = Vec::new();
     for rule in rules {
+        let tunnel = infos.len();
+        let target_host = rule.remote_host.clone().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "127.0.0.1".into());
         match rule.forward_type.as_str() {
             "local" | "dynamic" => {
                 let dynamic = rule.forward_type == "dynamic";
@@ -133,6 +177,14 @@ pub fn start_tunnels(
                 match bind_local(rule.local_port) {
                     Ok(l) => {
                         let _ = l.set_nonblocking(true);
+                        infos.push(TunnelInfo {
+                            kind: rule.forward_type.clone(),
+                            port: rule.local_port,
+                            target: target.as_ref().map(|(h, p)| format!("{h}:{p}")),
+                            state: "active".into(),
+                            error: None,
+                            connections: 0,
+                        });
                         notify(ok_line(match &target {
                             Some((h, p)) => tr!(
                                 "Tunel lokalny (-L): \x1b[36m127.0.0.1:{}\x1b[0m → \x1b[36m{}:{}\x1b[0m (przez serwer)",
@@ -145,34 +197,56 @@ pub fn start_tunnels(
                                 rule.local_port
                             ),
                         }));
-                        listeners.push(LocalListener { listener: l, target });
+                        listeners.push(LocalListener { listener: l, target, tunnel });
                     }
-                    Err(e) => notify(err_line(bind_error_message(rule.local_port, &e, owners))),
+                    Err(e) => {
+                        let message = bind_error_message(rule.local_port, &e, owners);
+                        infos.push(TunnelInfo {
+                            kind: rule.forward_type.clone(),
+                            port: rule.local_port,
+                            target: target.as_ref().map(|(h, p)| format!("{h}:{p}")),
+                            state: "error".into(),
+                            error: Some(message.clone()),
+                            connections: 0,
+                        });
+                        notify(err_line(message));
+                    }
                 }
             }
-            "remote" => remote_rules.push(RemoteRule {
-                server_port: rule.local_port,
-                target_host: rule.remote_host.clone().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "127.0.0.1".into()),
-                target_port: rule.remote_port.unwrap_or(80),
-            }),
+            "remote" => {
+                let target_port = rule.remote_port.unwrap_or(80);
+                infos.push(TunnelInfo {
+                    kind: "remote".into(),
+                    port: rule.local_port,
+                    target: Some(format!("{target_host}:{target_port}")),
+                    state: "waiting".into(),
+                    error: None,
+                    connections: 0,
+                });
+                remote_rules.push(RemoteRule { server_port: rule.local_port, target_host, target_port, tunnel });
+            }
             _ => {}
         }
     }
+    let status: SharedStatus = Arc::new(Mutex::new(TunnelsStatus { connected: false, error: None, tunnels: infos }));
 
     let ports: Vec<u16> = listeners.iter().filter_map(|l| l.listener.local_addr().ok().map(|a| a.port())).collect();
     let listeners = Arc::new(Mutex::new(listeners));
     let worker_shutdown = shutdown.clone();
     let worker_listeners = listeners.clone();
+    let worker_status = status.clone();
     std::thread::spawn(move || {
-        Worker::new(config, worker_listeners, remote_rules, notify, worker_shutdown).run();
+        Worker::new(config, worker_listeners, remote_rules, notify, worker_shutdown, worker_status).run();
     });
-    Some(TunnelHandle { shutdown_flag: shutdown, listeners, ports, title })
+    Some(TunnelHandle { shutdown_flag: shutdown, listeners, ports, title, status })
 }
 
 struct LocalListener {
     listener: TcpListener,
     /// `Some((host, port))` = -L target; `None` = SOCKS5 (target from the client).
     target: Option<(String, u16)>,
+    /// Index in `TunnelsStatus::tunnels`
+    tunnel: usize,
 }
 
 #[derive(Clone)]
@@ -180,6 +254,7 @@ struct RemoteRule {
     server_port: u16,
     target_host: String,
     target_port: u16,
+    tunnel: usize,
 }
 
 /// A TCP client waiting for its channel.
@@ -189,11 +264,12 @@ struct PendingOpen {
     port: u16,
     socks: bool,
     since: Instant,
+    tunnel: usize,
 }
 
 enum Event {
     /// SOCKS5 handshake finished – open a channel to host:port.
-    SocksRequest { stream: TcpStream, host: String, port: u16 },
+    SocksRequest { stream: TcpStream, host: String, port: u16, tunnel: usize },
     /// -R: the local target of an incoming server connection is connected (or failed).
     RemoteTarget { id: u64, stream: Option<TcpStream> },
 }
@@ -293,6 +369,8 @@ fn socks_handshake(stream: &mut TcpStream) -> Option<(String, u16)> {
 
 /// One forwarded connection: a TCP socket and an SSH channel, both non-blocking.
 struct Conn {
+    /// Index in `TunnelsStatus::tunnels`
+    tunnel: usize,
     tcp: TcpStream,
     ch: ssh2::Channel,
     to_ch: Vec<u8>,
@@ -316,10 +394,11 @@ enum Pump {
 }
 
 impl Conn {
-    fn new(tcp: TcpStream, ch: ssh2::Channel) -> Self {
+    fn new(tcp: TcpStream, ch: ssh2::Channel, tunnel: usize) -> Self {
         let _ = tcp.set_nonblocking(true);
         let _ = tcp.set_nodelay(true);
         Conn {
+            tunnel,
             tcp,
             ch,
             to_ch: Vec::new(),
@@ -469,15 +548,17 @@ struct Worker {
     ever_connected: bool,
     pending: VecDeque<PendingOpen>,
     /// SOCKS clients waiting for a free helper thread (bursts larger than MAX_HELPERS)
-    waiting_socks: VecDeque<(TcpStream, Instant)>,
+    waiting_socks: VecDeque<(TcpStream, Instant, usize)>,
     conns: Vec<Conn>,
     closing: Vec<Closing>,
     /// -R: server channels waiting for their local target connection.
-    awaiting_target: HashMap<u64, ssh2::Channel>,
+    awaiting_target: HashMap<u64, (ssh2::Channel, usize)>,
     next_id: u64,
     helpers: Arc<AtomicUsize>,
     tx: Sender<Event>,
     rx: Receiver<Event>,
+    status: SharedStatus,
+    last_counts: Vec<usize>,
 }
 
 impl Worker {
@@ -487,6 +568,7 @@ impl Worker {
         remote_rules: Vec<RemoteRule>,
         notify: Notify,
         shutdown: Arc<AtomicBool>,
+        status: SharedStatus,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         Worker {
@@ -508,6 +590,27 @@ impl Worker {
             helpers: Arc::new(AtomicUsize::new(0)),
             tx,
             rx,
+            status,
+            last_counts: Vec::new(),
+        }
+    }
+
+    /// Open connections per tunnel, for the tunnels window (written only when they change).
+    fn publish_counts(&mut self) {
+        let len = self.status.lock().map(|s| s.tunnels.len()).unwrap_or(0);
+        let mut counts = vec![0usize; len];
+        for c in &self.conns {
+            if let Some(n) = counts.get_mut(c.tunnel) {
+                *n += 1;
+            }
+        }
+        if counts != self.last_counts {
+            update_status(&self.status, |s| {
+                for (t, n) in s.tunnels.iter_mut().zip(&counts) {
+                    t.connections = *n;
+                }
+            });
+            self.last_counts = counts;
         }
     }
 
@@ -518,6 +621,7 @@ impl Worker {
     fn run(mut self) {
         let mut buf = vec![0u8; BUF_SIZE];
         let mut last_keepalive = Instant::now();
+        let mut last_publish = Instant::now();
         // Connect right away: errors show up in the terminal at once and -R tunnels need it.
         self.ensure_connected();
 
@@ -580,6 +684,11 @@ impl Worker {
                 }
             }
 
+            if last_publish.elapsed() >= Duration::from_millis(500) {
+                last_publish = Instant::now();
+                self.publish_counts();
+            }
+
             if !active {
                 let idle = self.conns.is_empty() && self.pending.is_empty() && self.waiting_socks.is_empty();
                 std::thread::sleep(Duration::from_millis(if idle { 20 } else { 2 }));
@@ -618,6 +727,13 @@ impl Worker {
                 for rule in &self.remote_rules {
                     match sess.channel_forward_listen(rule.server_port, None, None) {
                         Ok((l, port)) => {
+                            let tunnel = rule.tunnel;
+                            update_status(&self.status, |s| {
+                                if let Some(t) = s.tunnels.get_mut(tunnel) {
+                                    t.state = "active".into();
+                                    t.error = None;
+                                }
+                            });
                             (self.notify)(ok_line(tr!(
                                 "Tunel zdalny (-R): \x1b[36mserwer:{}\x1b[0m → \x1b[36m{}:{}\x1b[0m (ten komputer)",
                                 "Remote tunnel (-R): \x1b[36mserver:{}\x1b[0m → \x1b[36m{}:{}\x1b[0m (this computer)",
@@ -625,11 +741,21 @@ impl Worker {
                             )));
                             remote_listeners.push((l, rule.clone()));
                         }
-                        Err(e) => (self.notify)(err_line(tr!(
-                            "Serwer nie pozwolił nasłuchiwać na porcie {} (-R): {}",
-                            "The server refused to listen on port {} (-R): {}",
-                            rule.server_port, e
-                        ))),
+                        Err(e) => {
+                            let message = tr!(
+                                "Serwer nie pozwolił nasłuchiwać na porcie {} (-R): {}",
+                                "The server refused to listen on port {} (-R): {}",
+                                rule.server_port, e
+                            );
+                            let tunnel = rule.tunnel;
+                            update_status(&self.status, |s| {
+                                if let Some(t) = s.tunnels.get_mut(tunnel) {
+                                    t.state = "error".into();
+                                    t.error = Some(message.clone());
+                                }
+                            });
+                            (self.notify)(err_line(message));
+                        }
                     }
                 }
                 sess.set_timeout(0);
@@ -641,8 +767,17 @@ impl Worker {
                 self.ever_connected = true;
                 self.connect_error_reported = false;
                 self.ssh = Some(Ssh { sess, remote_listeners });
+                update_status(&self.status, |s| {
+                    s.connected = true;
+                    s.error = None;
+                });
             }
             Err(e) => {
+                let reason = e.to_string();
+                update_status(&self.status, |s| {
+                    s.connected = false;
+                    s.error = Some(reason);
+                });
                 if !self.connect_error_reported {
                     (self.notify)(err_line(tr!(
                         "Tunele: nie udało się połączyć z serwerem ({}). Ponowna próba przy kolejnym połączeniu.",
@@ -669,6 +804,13 @@ impl Worker {
         self.awaiting_target.clear();
         self.ssh = None;
         self.last_attempt = None;
+        update_status(&self.status, |s| {
+            s.connected = false;
+            s.error = Some(tr!("połączenie przerwane", "connection lost").to_string());
+            for t in s.tunnels.iter_mut().filter(|t| t.kind == "remote" && t.state == "active") {
+                t.state = "waiting".into();
+            }
+        });
     }
 
     /// Accepts new clients on the local -L / -D ports.
@@ -679,13 +821,13 @@ impl Worker {
             for l in listeners.iter() {
                 for _ in 0..16 {
                     match l.listener.accept() {
-                        Ok((stream, _)) => accepted.push((stream, l.target.clone())),
+                        Ok((stream, _)) => accepted.push((stream, l.target.clone(), l.tunnel)),
                         Err(_) => break, // WouldBlock or a transient error
                     }
                 }
             }
         }
-        for (stream, target) in accepted {
+        for (stream, target, tunnel) in accepted {
             {
                 active = true;
                 if self.busy() >= MAX_CONNECTIONS || self.pending.len() >= MAX_PENDING_OPENS {
@@ -694,9 +836,9 @@ impl Worker {
                 }
                 match target {
                     Some((host, port)) => {
-                        self.pending.push_back(PendingOpen { stream, host, port, socks: false, since: Instant::now() });
+                        self.pending.push_back(PendingOpen { stream, host, port, socks: false, since: Instant::now(), tunnel });
                     }
-                    None => self.waiting_socks.push_back((stream, Instant::now())),
+                    None => self.waiting_socks.push_back((stream, Instant::now(), tunnel)),
                 }
             }
         }
@@ -708,19 +850,19 @@ impl Worker {
     /// larger than the limit waits instead of being refused.
     fn start_socks_handshakes(&mut self) -> bool {
         let mut active = false;
-        while let Some((_, since)) = self.waiting_socks.front() {
+        while let Some((_, since, _)) = self.waiting_socks.front() {
             if since.elapsed() > OPEN_TIMEOUT {
                 self.waiting_socks.pop_front();
                 continue;
             }
             let Some(slot) = HelperSlot::try_acquire(&self.helpers) else { break };
-            let (stream, _) = self.waiting_socks.pop_front().unwrap();
+            let (stream, _, tunnel) = self.waiting_socks.pop_front().unwrap();
             let tx = self.tx.clone();
             std::thread::spawn(move || {
                 let _slot = slot;
                 let mut stream = stream;
                 if let Some((host, port)) = socks_handshake(&mut stream) {
-                    let _ = tx.send(Event::SocksRequest { stream, host, port });
+                    let _ = tx.send(Event::SocksRequest { stream, host, port, tunnel });
                 }
             });
             active = true;
@@ -733,17 +875,17 @@ impl Worker {
         while let Ok(ev) = self.rx.try_recv() {
             active = true;
             match ev {
-                Event::SocksRequest { mut stream, host, port } => {
+                Event::SocksRequest { mut stream, host, port, tunnel } => {
                     if self.pending.len() >= MAX_PENDING_OPENS {
                         socks_reply(&mut stream, 1);
                     } else {
-                        self.pending.push_back(PendingOpen { stream, host, port, socks: true, since: Instant::now() });
+                        self.pending.push_back(PendingOpen { stream, host, port, socks: true, since: Instant::now(), tunnel });
                     }
                 }
                 Event::RemoteTarget { id, stream } => {
-                    if let Some(ch) = self.awaiting_target.remove(&id) {
+                    if let Some((ch, tunnel)) = self.awaiting_target.remove(&id) {
                         match stream {
-                            Some(s) => self.conns.push(Conn::new(s, ch)),
+                            Some(s) => self.conns.push(Conn::new(s, ch, tunnel)),
                             None => self.closing.push(Closing { ch, since: Instant::now() }),
                         }
                     }
@@ -772,7 +914,7 @@ impl Worker {
                     if p.socks {
                         socks_reply(&mut p.stream, 0);
                     }
-                    self.conns.push(Conn::new(p.stream, ch));
+                    self.conns.push(Conn::new(p.stream, ch, p.tunnel));
                     active = true;
                 }
                 Err(e) if is_eagain(&e) => break,
@@ -819,7 +961,7 @@ impl Worker {
             };
             let id = self.next_id;
             self.next_id += 1;
-            self.awaiting_target.insert(id, ch);
+            self.awaiting_target.insert(id, (ch, rule.tunnel));
             let tx = self.tx.clone();
             std::thread::spawn(move || {
                 let _slot = slot;
@@ -957,6 +1099,12 @@ mod tunnel_e2e {
         let second = start_tunnels(cfg.clone(), vec![rule("local", port, None, Some(80))], notify.clone(), "Serwer B".into(), &owners).unwrap();
         assert!(second.ports.is_empty());
         assert!(log.lock().unwrap().join("").contains("Serwer A"), "{:?}", log.lock().unwrap());
+        // The tunnels window shows the failed tunnel with the same message
+        let st = second.status().unwrap();
+        assert_eq!(st.tunnels.len(), 1);
+        assert_eq!(st.tunnels[0].state, "error");
+        assert!(st.tunnels[0].error.as_deref().is_some_and(|e| e.contains("Serwer A")));
+        assert_eq!(first.status().unwrap().tunnels[0].state, "active");
         second.shutdown();
 
         // Reconnect: the port is free right after shutdown although the worker is still connecting
@@ -998,6 +1146,20 @@ mod tunnel_e2e {
         )
         .unwrap();
         std::thread::sleep(Duration::from_millis(1500));
+
+        // Status for the tunnels window
+        let st = handle.status().unwrap();
+        assert!(st.connected && st.error.is_none());
+        let kinds: Vec<_> = st.tunnels.iter().map(|t| (t.kind.as_str(), t.port, t.state.as_str())).collect();
+        assert_eq!(kinds, vec![("local", 41001, "active"), ("dynamic", 41002, "active"), ("remote", 41003, "active")]);
+        assert_eq!(st.tunnels[0].target.as_deref(), Some(format!("127.0.0.1:{target}").as_str()));
+        assert_eq!(st.tunnels[1].target, None);
+        // An open forwarded connection is counted for its tunnel
+        let held = TcpStream::connect(("127.0.0.1", 41001)).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        let counts: Vec<_> = handle.status().unwrap().tunnels.iter().map(|t| t.connections).collect();
+        assert_eq!(counts, vec![1, 0, 0]);
+        drop(held);
 
         // -L with half-close and a large request (many channel windows)
         let big = vec![b'x'; 3 * 1024 * 1024];

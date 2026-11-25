@@ -25,6 +25,7 @@ import { SftpManager } from './SftpManager';
 import { tn, useT } from '../../i18n';
 import { useLightTerminal } from '../../theme';
 import { useMenuPosition } from '../../utils/useMenuPosition';
+import { TunnelsDialog } from '../dialogs/TunnelsDialog';
 
 // Full 16-colour palettes. The dark one is the original RemoteFlow terminal; the light one is used
 // with the light application theme (unless "keep the terminal dark" is set in Settings).
@@ -96,6 +97,7 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
   const fitAddonRef = useRef<FitAddon | null>(null);
 
   const [isSftpOpen, setIsSftpOpen] = useState(false);
+  const [isTunnelsOpen, setIsTunnelsOpen] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -348,7 +350,7 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
       term.writeln('\x1b[1;36m=== RemoteFlow SSH Terminal (Web Mock Preview) ===\x1b[0m');
       term.writeln(`\x1b[32m✔ Połączono:\x1b[0m ${session.username}@${session.host}:${session.port}`);
       if (session.activePortForwards.length > 0) {
-        term.writeln(`\x1b[33m⚡ Aktywne tunele portów: ${session.activePortForwards.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[33m⚡ ${t('Aktywne tunele portów: {list}', { list: session.activePortForwards.join(', ') })}\x1b[0m`);
       }
       term.writeln('\x1b[90mTyp sesji: xterm-256color | Obsługa schowka: Aktywna | Przeciągnij pliki: SFTP\x1b[0m\r\n');
       term.write(prompt);
@@ -656,13 +658,14 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
 
         {/* Active Port Forwards Badge */}
         {session.activePortForwards && session.activePortForwards.length > 0 && (
-          <div
-            title={t('Aktywne tunele SSH:\n{p0}', { p0: session.activePortForwards.join('\n') })}
-            className="flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-950/70 px-2 py-1 text-[11px] font-mono text-emerald-300 shadow-sm"
+          <button
+            onClick={() => setIsTunnelsOpen(true)}
+            title={t('Pokaż tunele SSH tego połączenia')}
+            className="flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-950/70 px-2 py-1 text-[11px] font-mono text-emerald-300 shadow-sm transition-colors hover:border-emerald-400 hover:bg-emerald-900/70 hover:text-emerald-200"
           >
             <ArrowRightLeft className="h-3 w-3 text-emerald-400 shrink-0" />
             <span>{t('Tunele ({n})', { n: session.activePortForwards.length })}</span>
-          </div>
+          </button>
         )}
 
         {/* Toggle SFTP File Explorer Drawer */}
@@ -768,6 +771,18 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
         onNotify={showNotification}
         fullWidth={splitLayout}
       />
+
+      {isTunnelsOpen && (
+        <TunnelsDialog
+          sessionId={session.sessionId}
+          title={session.title}
+          fallback={session.activePortForwards}
+          onClose={() => {
+            setIsTunnelsOpen(false);
+            termRef.current?.focus();
+          }}
+        />
+      )}
     </div>
   );
 };

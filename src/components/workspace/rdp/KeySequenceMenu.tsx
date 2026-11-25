@@ -444,7 +444,7 @@ export const KeySequenceMenu: React.FC<Props> = ({ isConnected, sendKeyCombinati
                   className="flex items-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500 transition-colors shrink-0 shadow-xs"
                 >
                   <Send className="h-3 w-3" />
-                  <span>{t('Wyślij')}</span>
+                  <span>{t('Wyślij klawisze')}</span>
                 </button>
               </div>
             </div>

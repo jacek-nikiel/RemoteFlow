@@ -564,6 +564,17 @@ pub fn session_resize(
     Ok(())
 }
 
+/// Tunnels of an SSH tab and their state (the tunnels window of the terminal). `None` when the
+/// session has no tunnels.
+#[tauri::command]
+pub fn get_session_tunnels(
+    session_id: String,
+    state: tauri::State<'_, SessionState>,
+) -> Result<Option<tunnels::TunnelsStatus>, String> {
+    let mgr = state.lock().map_err(|e| e.to_string())?;
+    Ok(mgr.tunnels.get(&session_id).and_then(|t| t.status()))
+}
+
 /// Current directory of the shell in an SSH terminal tab (SFTP "directory from the terminal").
 #[tauri::command]
 pub async fn ssh_terminal_cwd(

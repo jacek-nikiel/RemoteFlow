@@ -120,6 +120,23 @@ let mockSessions: SessionInfo[] = [];
 let mockCredentials: Credential[] = [];
 
 /** mRemoteNG encryption parameters (+ optional custom master password) for the import. */
+/** One SSH tunnel of a terminal tab and its state (session/tunnels.rs). */
+export interface TunnelInfo {
+  kind: 'local' | 'remote' | 'dynamic';
+  /** Port listened on: on this computer (-L, -D) or on the server (-R). */
+  port: number;
+  target: string | null;
+  state: 'active' | 'waiting' | 'error';
+  error: string | null;
+  connections: number;
+}
+
+export interface TunnelsStatus {
+  connected: boolean;
+  error: string | null;
+  tunnels: TunnelInfo[];
+}
+
 export interface MrngParams {
   password: string | null;
   encryptionEngine: string;
@@ -483,6 +500,14 @@ export const api = {
       return await invoke('ssh_terminal_cwd', { sessionId });
     }
     return { path: '/var/www/html', otherUserShell: false };
+  },
+
+  /** Tunnels of an SSH tab and their state; null when the tab has none. */
+  async getSessionTunnels(sessionId: string): Promise<TunnelsStatus | null> {
+    if (isTauri()) {
+      return await invoke<TunnelsStatus | null>('get_session_tunnels', { sessionId });
+    }
+    return null;
   },
 
   async launchExternalRdp(session: SessionInfo): Promise<void> {

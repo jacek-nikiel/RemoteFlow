@@ -96,7 +96,7 @@ export const LocalFolderBrowser: React.FC<Props> = ({ localPathRef, onSend }) =>
         {localLoading ? (
           <div className="flex items-center justify-center py-4 text-slate-400 gap-1.5">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />
-            <span>Wczytywanie...</span>
+            <span>{t('Wczytywanie…')}</span>
           </div>
         ) : (
           localEntries.map((item) => (
