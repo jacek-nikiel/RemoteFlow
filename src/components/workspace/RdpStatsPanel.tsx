@@ -3,6 +3,7 @@ import { Activity, Check, Copy, RotateCcw, X } from 'lucide-react';
 import { useT } from '../../i18n';
 import { api } from '../../services/api';
 import { APP_VERSION } from '../../version';
+import { getRdpDisplayInfo } from './rdp/layout';
 import { RdpBurst, RdpStatsSnapshot, resetRdpStats, setRdpStatsEnabled, takeRdpStats } from '../../utils/rdpStats';
 
 const f1 = (n: number) => n.toFixed(1);
@@ -35,9 +36,23 @@ export const RdpStatsPanel: React.FC<{ onClose: () => void }> = ({ onClose }) =>
         })
       : t('brak – przełącz okno na zdalnym pulpicie');
 
+  const d = s ? getRdpDisplayInfo() : null;
+  const displayText = d
+    ? t('pulpit {desktop} (zamówiony {requested}), obszar {area} px ekranu, skalowanie ekranu {screen}% – {shown}', {
+        desktop: `${d.desktop.width}×${d.desktop.height}`,
+        requested: d.requested
+          ? `${d.requested.width}×${d.requested.height}, ${d.requested.scale}%`
+          : '–',
+        area: `${d.area.width}×${d.area.height}`,
+        screen: d.screen,
+        shown: d.scale === 1 ? t('pokazany 1:1 (ostro)') : t('przeskalowany ×{s}', { s: d.scale.toFixed(3) }),
+      })
+    : '–';
+
   const rows: [string, string][] = s
     ? [
         [t('Silnik'), `${s.engine}, ${s.canvas}`],
+        [t('Obraz'), displayText],
         [t('Dane z serwera'), t('{mb} MB/s ({n} wiad./s)', { mb: f1(s.mbps), n: f0(s.msgs) })],
         [t('Aktualizacje ekranu'), t('{n} regionów/s, {mpx} Mpx/s', { n: f0(s.regions), mpx: f1(s.mpx) })],
         ...(s.engine.startsWith('WebKit') ? [[t('Klatki wyświetlone'), `${f0(s.frames)}/s`] as [string, string]] : []),

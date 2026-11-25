@@ -28,15 +28,12 @@ import {
   ArrowUp,
   HardDrive,
   Trash2,
-  Keyboard,
-  ChevronDown,
   Activity,
 } from 'lucide-react';
 import '@devolutions/iron-remote-desktop';
 import { ConfigBuilder, UserInteraction } from '@devolutions/iron-remote-desktop';
 import {
   Backend,
-  init as initRdpWasm,
   enableCredssp,
   displayControl,
   RdpFileTransferProvider,
@@ -48,49 +45,22 @@ import { api, isTauri, isWindowsHost } from '../../services/api';
 import { explainRdpError } from '../../utils/rdpErrors';
 import { listen } from '@tauri-apps/api/event';
 import { useT } from '../../i18n';
-import { installRdpCanvasBatching } from '../../utils/rdpCanvasBatching';
 import { rdpPixelRatio, rdpScaleFactor, screenScale } from '../../utils/rdpDisplay';
-import { installNumLockModifierFix, numLockFromEvent, trackNumLock } from '../../utils/rdpLockKeys';
-import { installRdpStats } from '../../utils/rdpStats';
+import { numLockFromEvent, trackNumLock } from '../../utils/rdpLockKeys';
 import { RdpStatsPanel } from './RdpStatsPanel';
-
-let rdpWasmInitPromise: Promise<void> | null = null;
-/** "host:port" with brackets around IPv6 literals ("[::1]:3389"), like the backend. */
-const hostPort = (host: string, port: number): string => {
-  const h = host.trim().replace(/^\[(.*)\]$/, '$1');
-  return h.includes(':') ? `[${h}]:${port}` : `${h}:${port}`;
-};
-
-/** WebKit engines (WebKitGTK on Linux, WKWebView on macOS) – not Chromium-based WebView2. */
-const isWebKitEngine = (): boolean => {
-  const ua = navigator.userAgent;
-  return /AppleWebKit/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua);
-};
-
-function ensureRdpInitialized(): Promise<void> {
-  // Measuring hooks for the statistics panel (inactive until the panel is opened)
-  installRdpStats();
-  // WebKit draws each putImageData call slowly – batch the RDP screen updates (see the module)
-  if (isWebKitEngine()) installRdpCanvasBatching();
-  // WebKit always reports NumLock as off – IronRDP then switched it off on the server
-  if (isWebKitEngine()) installNumLockModifierFix();
-  if (!rdpWasmInitPromise) {
-    rdpWasmInitPromise = initRdpWasm('info').catch((err) => {
-      rdpWasmInitPromise = null;
-      throw err;
-    });
-  }
-  return rdpWasmInitPromise;
-}
-
-const RESOLUTION_PRESETS = [
-  { label: 'Dopasuj do okna (Auto)', value: 'auto', width: 0, height: 0 },
-  { label: '1920 × 1080 (Full HD)', value: '1920x1080', width: 1920, height: 1080 },
-  { label: '2560 × 1440 (2K QHD)', value: '2560x1440', width: 2560, height: 1440 },
-  { label: '1600 × 900 (HD+)', value: '1600x900', width: 1600, height: 900 },
-  { label: '1366 × 768 (Laptop)', value: '1366x768', width: 1366, height: 768 },
-  { label: '1280 × 720 (HD 720p)', value: '1280x720', width: 1280, height: 720 },
-];
+import { ensureRdpInitialized, hostPort } from './rdp/engine';
+import { KeySequenceMenu } from './rdp/KeySequenceMenu';
+import {
+  applyCanvasStyle,
+  applyShadowRootScalingOverrides,
+  getDimensionsForPreset,
+  RemoteSize,
+  RESOLUTION_PRESETS,
+  noteRequestedSize,
+  remoteDesktopSize,
+  sendRemoteSize,
+  autoSizeFromArea,
+} from './rdp/layout';
 
 /** Remote -> local clipboard copies above this size are not downloaded automatically. */
 const REMOTE_CLIP_AUTO_LIMIT = 2 * 1024 * 1024 * 1024; // 2 GiB
@@ -102,283 +72,6 @@ const formatBytes = (bytes: number): string => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
-
-const SCANCODE_OPTIONS: { label: string; code: number; group: string }[] = [
-  // Klawisze funkcyjne
-  { label: 'F1', code: 0x003b, group: 'Klawisze funkcyjne' },
-  { label: 'F2', code: 0x003c, group: 'Klawisze funkcyjne' },
-  { label: 'F3', code: 0x003d, group: 'Klawisze funkcyjne' },
-  { label: 'F4', code: 0x003e, group: 'Klawisze funkcyjne' },
-  { label: 'F5', code: 0x003f, group: 'Klawisze funkcyjne' },
-  { label: 'F6', code: 0x0040, group: 'Klawisze funkcyjne' },
-  { label: 'F7', code: 0x0041, group: 'Klawisze funkcyjne' },
-  { label: 'F8', code: 0x0042, group: 'Klawisze funkcyjne' },
-  { label: 'F9', code: 0x0043, group: 'Klawisze funkcyjne' },
-  { label: 'F10', code: 0x0044, group: 'Klawisze funkcyjne' },
-  { label: 'F11', code: 0x0057, group: 'Klawisze funkcyjne' },
-  { label: 'F12', code: 0x0058, group: 'Klawisze funkcyjne' },
-
-  // Klawisze specjalne
-  { label: 'Delete (Del)', code: 0xe053, group: 'Klawisze specjalne' },
-  { label: 'Escape (Esc)', code: 0x0001, group: 'Klawisze specjalne' },
-  { label: 'Tab', code: 0x000f, group: 'Klawisze specjalne' },
-  { label: 'Enter', code: 0x001c, group: 'Klawisze specjalne' },
-  { label: 'Backspace', code: 0x000e, group: 'Klawisze specjalne' },
-  { label: 'Spacja (Space)', code: 0x0039, group: 'Klawisze specjalne' },
-  { label: 'Insert (Ins)', code: 0xe052, group: 'Klawisze specjalne' },
-  { label: 'Home', code: 0xe047, group: 'Klawisze specjalne' },
-  { label: 'End', code: 0xe04f, group: 'Klawisze specjalne' },
-  { label: 'Page Up', code: 0xe049, group: 'Klawisze specjalne' },
-  { label: 'Page Down', code: 0xe051, group: 'Klawisze specjalne' },
-  { label: 'Print Screen (PrtScn)', code: 0xe037, group: 'Klawisze specjalne' },
-
-  // Nawigacja / Strzałki
-  { label: 'Strzałka w górę (Up)', code: 0xe048, group: 'Nawigacja' },
-  { label: 'Strzałka w dół (Down)', code: 0xe050, group: 'Nawigacja' },
-  { label: 'Strzałka w lewo (Left)', code: 0xe04b, group: 'Nawigacja' },
-  { label: 'Strzałka w prawo (Right)', code: 0xe04d, group: 'Nawigacja' },
-
-  // Litery
-  ...['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'].map((char) => ({
-    label: char,
-    code: ({
-      A: 0x001e, B: 0x0030, C: 0x002e, D: 0x0020, E: 0x0012, F: 0x0021, G: 0x0022, H: 0x0023,
-      I: 0x0017, J: 0x0024, K: 0x0025, L: 0x0026, M: 0x0032, N: 0x0031, O: 0x0018, P: 0x0019,
-      Q: 0x0010, R: 0x0013, S: 0x001f, T: 0x0014, U: 0x0016, V: 0x002f, W: 0x0011, X: 0x002d,
-      Y: 0x0015, Z: 0x002c,
-    } as Record<string, number>)[char],
-    group: 'Litery',
-  })),
-
-  // Cyfry
-  ...['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => ({
-    label: num,
-    code: ({
-      '1': 0x0002, '2': 0x0003, '3': 0x0004, '4': 0x0005, '5': 0x0006,
-      '6': 0x0007, '7': 0x0008, '8': 0x0009, '9': 0x000a, '0': 0x000b,
-    } as Record<string, number>)[num],
-    group: 'Cyfry',
-  })),
-];
-
-/**
- * Remote desktop size that exactly fills the viewer area ("Auto" mode). `ratio` = device pixels
- * per CSS pixel (rdpDisplay.ts): on a high-DPI screen the desktop is requested in device pixels,
- * so the canvas is shown 1:1 on the screen instead of being stretched (blurry).
- */
-function autoSizeFromArea(width: number, height: number, ratio = 1): { width: number; height: number } | null {
-  if (width <= 300 || height <= 200) return null; // hidden tab / not laid out yet
-  let w = Math.min(8192, Math.max(640, Math.round(width * ratio)));
-  let h = Math.min(8192, Math.max(480, Math.round(height * ratio)));
-  w = w - (w % 4);
-  h = h - (h % 4);
-  return { width: w, height: h };
-}
-
-function getDimensionsForPreset(
-  preset: string,
-  container: HTMLElement | null,
-  rdpSettings?: { width: number; height: number } | null
-): { width: number; height: number } {
-  const found = RESOLUTION_PRESETS.find((p) => p.value === preset);
-  if (found && found.width > 0 && found.height > 0) {
-    return { width: found.width, height: found.height };
-  }
-
-  // "Auto": always follow the size of the viewer area (saved connection size is ignored).
-  if (container) {
-    const rect = container.getBoundingClientRect();
-    const auto = autoSizeFromArea(rect.width, rect.height);
-    if (auto) return auto;
-  }
-
-  if (rdpSettings?.width && rdpSettings?.height && rdpSettings.width > 0 && rdpSettings.height > 0) {
-    return { width: rdpSettings.width, height: rdpSettings.height };
-  }
-
-  return { width: 1920, height: 1080 };
-}
-
-/** Remote desktop size plus the device-pixel ratio it was computed for (1 = CSS pixels). */
-interface RemoteSize {
-  width: number;
-  height: number;
-  ratio: number;
-}
-
-/** Size to request for a resolution preset; only "Auto" follows the screen scaling (rdpDisplay.ts). */
-function remoteDesktopSize(
-  preset: string,
-  container: HTMLElement | null,
-  rdpSettings?: { width: number; height: number } | null
-): RemoteSize {
-  const fixed = RESOLUTION_PRESETS.some((p) => p.value === preset && p.width > 0);
-  if (!fixed && container) {
-    const rect = container.getBoundingClientRect();
-    const ratio = rdpPixelRatio();
-    const auto = autoSizeFromArea(rect.width, rect.height, ratio);
-    if (auto) return { ...auto, ratio };
-  }
-  // A fixed resolution, or the area is not laid out yet: the size as it is, not scaled
-  return { ...getDimensionsForPreset(preset, fixed ? container : null, rdpSettings), ratio: 1 };
-}
-
-/** Display Control resize with the matching desktop scale factor (also 100 % – resets a previous one). */
-function sendRemoteSize(ui: UserInteraction, size: RemoteSize) {
-  ui.resize(size.width, size.height, rdpScaleFactor(size.ratio));
-}
-
-/**
- * How the canvas is shown (the component itself always stays in its "fit" mode – its own sizing
- * would fight these rules):
- * - "Fit": scaled to fill the area, up or down, keeping the aspect ratio, centred. When that is
- *   (almost) one remote pixel per screen pixel – the Auto desktop, requested for the area in
- *   device pixels – it is shown exactly 1:1: the requested size is a few pixels smaller than the
- *   area (even sizes), and stretching by that fraction of a percent blurred text.
- * - "100% (1:1)": one remote pixel per screen pixel (the component showed it at one remote pixel
- *   per CSS pixel – 2× enlarged on a 200 % screen), from the top left, the wrapper scrolls.
- * A 1:1 canvas starts at a whole device pixel (a layout at e.g. 150 % or a split pane can start
- * between two) and is drawn without smoothing.
- */
-function applyCanvasStyle(shadowRoot: ShadowRoot | null | undefined, area: DOMRect | undefined, mode: 'fit' | 'real') {
-  if (!shadowRoot) return;
-  const id = 'remoteflow-rdp-hidpi';
-  let styleEl = shadowRoot.getElementById(id) as HTMLStyleElement | null;
-  if (!styleEl) {
-    styleEl = document.createElement('style');
-    styleEl.id = id;
-    shadowRoot.appendChild(styleEl);
-  }
-  // Written only when it changes: this function runs from a MutationObserver on the same tree
-  const setCss = (css: string) => {
-    if (styleEl!.textContent !== css) styleEl!.textContent = css;
-  };
-  const canvas = shadowRoot.querySelector('canvas#renderer') as HTMLCanvasElement | null;
-  if (!canvas || !area || canvas.width <= 0 || canvas.height <= 0 || area.width <= 0 || area.height <= 0) {
-    setCss('');
-    return;
-  }
-  const dpr = screenScale();
-  // Size in CSS pixels at one remote pixel per screen pixel
-  const w1 = canvas.width / dpr;
-  const h1 = canvas.height / dpr;
-  let scale = 1;
-  if (mode === 'fit') {
-    scale = Math.min(area.width / w1, area.height / h1);
-    if (scale >= 1 && scale < 1.02) scale = 1;
-  }
-  const w = w1 * scale;
-  const h = h1 * scale;
-  const align = mode === 'real' ? 'flex-start' : 'center';
-  // Selectors doubled: they must outrank the generic overrides (applyShadowRootScalingOverrides,
-  // e.g. ".screen-wrapper:not(.scale-real) canvas#renderer"), which are also !important
-  const css = (dx: number, dy: number) => `
-    :host, .svelte-1103xra.svelte-1103xra, .screen-wrapper.screen-wrapper.screen-wrapper, .screen-viewer.screen-viewer {
-      justify-content: ${align} !important;
-      align-items: ${align} !important;
-    }
-    .screen-wrapper.screen-wrapper.screen-wrapper {
-      overflow: ${mode === 'real' ? 'auto' : 'hidden'} !important;
-    }
-    .screen-viewer.screen-viewer {
-      width: auto !important;
-      height: auto !important;
-      min-width: 0 !important;
-      min-height: 0 !important;
-      max-width: none !important;
-      max-height: none !important;
-      flex: none !important;
-    }
-    canvas#renderer#renderer {
-      width: ${w}px !important;
-      height: ${h}px !important;
-      min-width: 0 !important;
-      min-height: 0 !important;
-      max-width: none !important;
-      max-height: none !important;
-      transform: translate(${dx}px, ${dy}px) !important;
-      image-rendering: ${scale === 1 ? 'pixelated' : 'auto'} !important;
-    }`;
-  setCss(css(0, 0));
-  if (scale !== 1) return;
-  const rect = canvas.getBoundingClientRect(); // layout without the shift
-  const snap = (v: number) => (Math.round(v * dpr) - v * dpr) / dpr;
-  setCss(css(snap(rect.left), snap(rect.top)));
-}
-
-// Inject CSS overrides into open ShadowRoot of <iron-remote-desktop> so canvas scales to fit without clipping or covering the Windows taskbar
-function applyShadowRootScalingOverrides(shadowRoot: ShadowRoot | null) {
-  if (!shadowRoot) return;
-  const styleId = 'remoteflow-rdp-scaling-fix';
-  if (shadowRoot.getElementById(styleId)) {
-    return;
-  }
-
-  const styleEl = document.createElement('style');
-  styleEl.id = styleId;
-  styleEl.textContent = `
-    :host {
-      display: flex !important;
-      width: 100% !important;
-      height: 100% !important;
-      min-width: 0 !important;
-      min-height: 0 !important;
-      max-width: 100% !important;
-      max-height: 100% !important;
-      overflow: hidden !important;
-      align-items: center !important;
-      justify-content: center !important;
-    }
-    .svelte-1103xra {
-      display: flex !important;
-      width: 100% !important;
-      height: 100% !important;
-      min-width: 0 !important;
-      min-height: 0 !important;
-      max-width: 100% !important;
-      max-height: 100% !important;
-      overflow: hidden !important;
-      align-items: center !important;
-      justify-content: center !important;
-    }
-    .screen-wrapper {
-      display: flex !important;
-      width: 100% !important;
-      height: 100% !important;
-      min-width: 0 !important;
-      min-height: 0 !important;
-      max-width: 100% !important;
-      max-height: 100% !important;
-      overflow: hidden !important;
-      align-items: center !important;
-      justify-content: center !important;
-    }
-    .screen-wrapper.scale-real {
-      overflow: auto !important;
-      display: block !important;
-    }
-    .screen-viewer {
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      min-width: 0 !important;
-      min-height: 0 !important;
-      max-width: 100% !important;
-      max-height: 100% !important;
-    }
-    .screen-wrapper:not(.scale-real) canvas#renderer {
-      display: block !important;
-      min-width: 0 !important;
-      min-height: 0 !important;
-      max-width: 100% !important;
-      max-height: 100% !important;
-      width: auto !important;
-      height: auto !important;
-      object-fit: contain !important;
-    }
-  `;
-  shadowRoot.appendChild(styleEl);
-}
 
 interface Props {
   session: SessionInfo;
@@ -435,17 +128,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
   }, []);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
 
-  // Key Sequence / Combination menu
-  const [isKeyMenuOpen, setIsKeyMenuOpen] = useState(false);
   const [isStatsOpen, setIsStatsOpen] = useState(false);
-  const [keyMenuTab, setKeyMenuTab] = useState<'shortcuts' | 'custom' | 'text'>('shortcuts');
-  const [customCtrl, setCustomCtrl] = useState(true);
-  const [customAlt, setCustomAlt] = useState(true);
-  const [customShift, setCustomShift] = useState(false);
-  const [customWin, setCustomWin] = useState(false);
-  const [customKey, setCustomKey] = useState<number>(0xe053); // Delete by default
-  const [customTextInput, setCustomTextInput] = useState('');
-  const keyMenuRef = useRef<HTMLDivElement>(null);
 
   // Unified Clipboard & File Transfer Drawer
   const [isClipboardDrawerOpen, setIsClipboardDrawerOpen] = useState(false);
@@ -1222,6 +905,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
           const rdpPassword = await api.getRdpSessionPassword(session.sessionId, session.connectionId);
           if (!isSubscribed) return;
           const targetDimensions = remoteDesktopSize(selectedResolution, containerRef.current, session.rdpSettings);
+          noteRequestedSize(targetDimensions);
 
           const configBuilder = new ConfigBuilder()
             .withDestination(hostPort(session.host, session.port))
@@ -1443,20 +1127,6 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
   }, [isActive, syncLocalClipboardToRemote]);
 
 
-  // Close Key Sequence menu on outside click
-  useEffect(() => {
-    if (!isKeyMenuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (keyMenuRef.current && !keyMenuRef.current.contains(e.target as Node)) {
-        setIsKeyMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isKeyMenuOpen]);
-
   // Send arbitrary key combination to remote Windows RDP
   const sendKeyCombination = useCallback(
     (scancodes: number[], label?: string, useSpecial?: 'ctrlAltDel' | 'metaKey') => {
@@ -1523,33 +1193,6 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
     },
     [showToast, focusRdpCanvas]
   );
-
-  // Send custom constructed key combination
-  const handleSendCustomCombo = useCallback(() => {
-    const scancodes: number[] = [];
-    if (customCtrl) scancodes.push(0x001d);
-    if (customAlt) scancodes.push(0x0038);
-    if (customShift) scancodes.push(0x002a);
-    if (customWin) scancodes.push(0xe05b);
-    if (customKey) scancodes.push(customKey);
-
-    if (scancodes.length === 0) {
-      showToast(t('Wybierz przynajmniej jeden klawisz'), 2000);
-      return;
-    }
-
-    const labelParts: string[] = [];
-    if (customCtrl) labelParts.push('Ctrl');
-    if (customAlt) labelParts.push('Alt');
-    if (customShift) labelParts.push('Shift');
-    if (customWin) labelParts.push('Win');
-    const keyOption = SCANCODE_OPTIONS.find((o) => o.code === customKey);
-    if (keyOption) labelParts.push(t(keyOption.label));
-
-    const label = labelParts.join(' + ');
-    sendKeyCombination(scancodes, label);
-    setIsKeyMenuOpen(false);
-  }, [customCtrl, customAlt, customShift, customWin, customKey, sendKeyCombination, showToast]);
 
   // Copy session password to clipboard & RDP
   const handleCopyPassword = async () => {
@@ -1983,417 +1626,13 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
           </button>
 
           {/* Wyślij sekwencję klawiszy do Windows */}
-          <div className="relative" ref={keyMenuRef}>
-            <button
-              onClick={() => setIsKeyMenuOpen((v) => !v)}
-              disabled={!isConnected}
-              title={t('Wyślij sekwencję lub kombinację klawiszy do systemu Windows (Ctrl+Alt+Del, Win+L, itp.)')}
-              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 disabled:pointer-events-none ${
-                isKeyMenuOpen
-                  ? 'border-amber-500 bg-amber-950/70 text-amber-200 shadow-xs'
-                  : 'border-slate-700 bg-slate-800/80 text-slate-200 hover:bg-slate-700 hover:text-white'
-              }`}
-            >
-              <Keyboard className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-              <span className="text-[11px] font-medium hidden sm:inline">{t('Wyślij sekwencję klawiszy')}</span>
-              <ChevronDown
-                className={`h-3 w-3 text-slate-400 transition-transform ${isKeyMenuOpen ? 'rotate-180' : ''}`}
-              />
-            </button>
-
-            {isKeyMenuOpen && (
-              <div className="absolute right-0 top-full mt-1.5 w-84 sm:w-96 max-h-[80vh] overflow-y-auto rounded-xl border border-slate-700/80 bg-slate-900/98 p-3 shadow-2xl backdrop-blur-md z-50 text-slate-200">
-                {/* Header */}
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <Keyboard className="h-4 w-4 text-amber-400" />
-                    <span className="text-xs font-bold text-white">{t('Sekwencja klawiszy Windows')}</span>
-                  </div>
-                  <button
-                    onClick={() => setIsKeyMenuOpen(false)}
-                    className="rounded-md p-1 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-
-                {/* Tabs */}
-                <div className="flex rounded-lg bg-slate-950 p-0.5 mb-3 border border-slate-800">
-                  <button
-                    onClick={() => setKeyMenuTab('shortcuts')}
-                    className={`flex-1 rounded-md py-1 text-[11px] font-semibold transition-all ${
-                      keyMenuTab === 'shortcuts'
-                        ? 'bg-slate-800 text-cyan-300 shadow-xs'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {t('Szybkie skróty')}
-                  </button>
-                  <button
-                    onClick={() => setKeyMenuTab('custom')}
-                    className={`flex-1 rounded-md py-1 text-[11px] font-semibold transition-all ${
-                      keyMenuTab === 'custom'
-                        ? 'bg-slate-800 text-cyan-300 shadow-xs'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {t('Własna kombinacja')}
-                  </button>
-                  <button
-                    onClick={() => setKeyMenuTab('text')}
-                    className={`flex-1 rounded-md py-1 text-[11px] font-semibold transition-all ${
-                      keyMenuTab === 'text'
-                        ? 'bg-slate-800 text-cyan-300 shadow-xs'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {t('Wpisz tekst')}
-                  </button>
-                </div>
-
-                {/* Tab: Szybkie skróty */}
-                {keyMenuTab === 'shortcuts' && (
-                  <div className="space-y-3">
-                    {/* System i Logowanie */}
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1.5">
-                        <ShieldCheck className="h-3 w-3 text-cyan-400" />
-                        <span>{t('System i Logowanie')}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0x001d, 0x0038, 0xe053], t('Ctrl + Alt + Del'), 'ctrlAltDel');
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-amber-500/30 bg-amber-950/20 px-2.5 py-1.5 text-left hover:bg-amber-900/40 hover:border-amber-500/60 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-amber-300">Ctrl+Alt+Del</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Logowanie')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0x001d, 0x002a, 0x0001], t('Ctrl + Shift + Esc'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-cyan-300">Ctrl+Shift+Esc</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Menedżer')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x0026], t('Win + L'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-blue-300">{t('Win + L')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Zablokuj')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b], t('Klawisz Windows'), 'metaKey');
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-blue-400">{t('Klawisz Win')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Menu Start')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x0013], t('Win + R'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + R')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Uruchom')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x0012], t('Win + E'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + E')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Eksplorator')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x0020], t('Win + D'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + D')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Pulpit')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x002d], t('Win + X'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + X')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Menu szybkie')}</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Okna i Aplikacje */}
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1.5">
-                        <Tv className="h-3 w-3 text-purple-400" />
-                        <span>{t('Okna i Aplikacje')}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0x0038, 0x000f], t('Alt + Tab'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-purple-300">{t('Alt + Tab')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Przełącz okno')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0x0038, 0x003e], t('Alt + F4'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-red-500/30 bg-red-950/20 px-2.5 py-1.5 text-left hover:bg-red-900/40 hover:border-red-500/50 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-red-300">{t('Alt + F4')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Zamknij okno')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0xe048], t('Win + Góra'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + ↑')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Maksymalizuj')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0xe050], t('Win + Dół'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + ↓')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Minimalizuj')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0x0038, 0x0039], t('Alt + Spacja'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Alt + Spacja')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Menu okna')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x000f], t('Win + Tab'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + Tab')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Widok zadań')}</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Narzędzia i Schowek */}
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1.5">
-                        <Clipboard className="h-3 w-3 text-emerald-400" />
-                        <span>{t('Narzędzia i Schowek')}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x002a, 0x001f], t('Win + Shift + S'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-emerald-300">Win+Shift+S</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Wycinanie')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe037], t('Print Screen'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Print Screen')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Zrzut ekranu')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendKeyCombination([0xe05b, 0x002f], t('Win + V'));
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-slate-200">{t('Win + V')}</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Schowek Win')}</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            sendF5ToRemote();
-                            setIsKeyMenuOpen(false);
-                          }}
-                          className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-left hover:bg-slate-700 transition-colors group"
-                        >
-                          <span className="text-[11px] font-semibold text-amber-400">F5</span>
-                          <span className="text-[9px] text-slate-400 group-hover:text-slate-200">{t('Odśwież')}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab: Własna kombinacja */}
-                {keyMenuTab === 'custom' && (
-                  <div className="space-y-3">
-                    <div>
-                      <span className="text-[11px] font-medium text-slate-300 block mb-1.5">
-                        {t('Klawisze modyfikujące:')}
-                      </span>
-                      <div className="grid grid-cols-4 gap-1.5">
-                        {[
-                          { label: 'Ctrl', active: customCtrl, toggle: () => setCustomCtrl(!customCtrl) },
-                          { label: 'Alt', active: customAlt, toggle: () => setCustomAlt(!customAlt) },
-                          { label: 'Shift', active: customShift, toggle: () => setCustomShift(!customShift) },
-                          { label: 'Win', active: customWin, toggle: () => setCustomWin(!customWin) },
-                        ].map((mod) => (
-                          <button
-                            key={mod.label}
-                            type="button"
-                            onClick={mod.toggle}
-                            className={`flex items-center justify-center rounded-lg border py-1.5 text-xs font-semibold transition-all ${
-                              mod.active
-                                ? 'border-cyan-500 bg-cyan-950/70 text-cyan-200 shadow-xs'
-                                : 'border-slate-700 bg-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-700'
-                            }`}
-                          >
-                            {mod.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="text-[11px] font-medium text-slate-300 block mb-1.5">
-                        {t('Klawisz główny:')}
-                      </span>
-                      <select
-                        value={customKey}
-                        onChange={(e) => setCustomKey(parseInt(e.target.value, 10))}
-                        className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 focus:border-cyan-500 focus:outline-hidden"
-                      >
-                        {Object.entries(
-                          SCANCODE_OPTIONS.reduce((acc, opt) => {
-                            if (!acc[opt.group]) acc[opt.group] = [];
-                            acc[opt.group].push(opt);
-                            return acc;
-                          }, {} as Record<string, typeof SCANCODE_OPTIONS>)
-                        ).map(([group, opts]) => (
-                          <optgroup key={group} label={t(group)} className="bg-slate-900 text-slate-300">
-                            {opts.map((opt) => (
-                              <option key={opt.label + opt.code} value={opt.code} className="bg-slate-800 text-slate-200">
-                                {t(opt.label)}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Preview and Send button */}
-                    <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
-                      <div className="flex-1 min-w-0 font-mono text-xs text-cyan-300 bg-slate-950 border border-slate-800 px-2.5 py-1.5 rounded-lg truncate text-center">
-                        {[
-                          customCtrl && 'Ctrl',
-                          customAlt && 'Alt',
-                          customShift && 'Shift',
-                          customWin && 'Win',
-                          t(SCANCODE_OPTIONS.find((o) => o.code === customKey)?.label || 'Klawisz'),
-                        ]
-                          .filter(Boolean)
-                          .join(' + ')}
-                      </div>
-                      <button
-                        onClick={handleSendCustomCombo}
-                        className="flex items-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500 transition-colors shrink-0 shadow-xs"
-                      >
-                        <Send className="h-3 w-3" />
-                        <span>{t('Wyślij')}</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab: Wpisz tekst */}
-                {keyMenuTab === 'text' && (
-                  <div className="space-y-2">
-                    <span className="text-[11px] text-slate-300 block">
-                      {t('Wpisz tekst do wysłania jako sekwencję naciśnięć klawiszy do systemu Windows:')}
-                    </span>
-                    <textarea
-                      value={customTextInput}
-                      onChange={(e) => setCustomTextInput(e.target.value)}
-                      placeholder={t('Wpisz lub wklej tekst do wysłania...')}
-                      rows={3}
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-hidden resize-none font-mono"
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        onClick={() => {
-                          sendTextSequence(customTextInput);
-                          setCustomTextInput('');
-                          setIsKeyMenuOpen(false);
-                        }}
-                        disabled={!customTextInput.trim()}
-                        className="flex items-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500 disabled:opacity-40 disabled:pointer-events-none transition-colors shadow-xs"
-                      >
-                        <Send className="h-3 w-3" />
-                        <span>{t('Wyślij tekst ({n} zn.)', { n: customTextInput.length })}</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <KeySequenceMenu
+            isConnected={isConnected}
+            sendKeyCombination={sendKeyCombination}
+            sendTextSequence={sendTextSequence}
+            sendF5ToRemote={sendF5ToRemote}
+            showToast={showToast}
+          />
 
           {/* Send F5 (Odśwież) to Windows */}
           <button
