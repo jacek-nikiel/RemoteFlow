@@ -25,7 +25,7 @@ import { SftpManager } from './SftpManager';
 import { tn, useT } from '../../i18n';
 import { useLightTerminal } from '../../theme';
 import { useMenuPosition } from '../../utils/useMenuPosition';
-import { TunnelsDialog } from '../dialogs/TunnelsDialog';
+import { TunnelsMenu } from './TunnelsMenu';
 
 // Full 16-colour palettes. The dark one is the original RemoteFlow terminal; the light one is used
 // with the light application theme (unless "keep the terminal dark" is set in Settings).
@@ -98,6 +98,11 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
 
   const [isSftpOpen, setIsSftpOpen] = useState(false);
   const [isTunnelsOpen, setIsTunnelsOpen] = useState(false);
+  const tunnelsButtonRef = useRef<HTMLButtonElement>(null);
+  const closeTunnels = useCallback(() => {
+    setIsTunnelsOpen(false);
+    termRef.current?.focus();
+  }, []);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -659,8 +664,11 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
         {/* Active Port Forwards Badge */}
         {session.activePortForwards && session.activePortForwards.length > 0 && (
           <button
-            onClick={() => setIsTunnelsOpen(true)}
-            title={t('Pokaż tunele SSH tego połączenia')}
+            ref={tunnelsButtonRef}
+            onClick={() => setIsTunnelsOpen((v) => !v)}
+            aria-expanded={isTunnelsOpen}
+            aria-haspopup="dialog"
+            title={isTunnelsOpen ? undefined : t('Pokaż tunele SSH tego połączenia')}
             className="flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-950/70 px-2 py-1 text-[11px] font-mono text-emerald-300 shadow-sm transition-colors hover:border-emerald-400 hover:bg-emerald-900/70 hover:text-emerald-200"
           >
             <ArrowRightLeft className="h-3 w-3 text-emerald-400 shrink-0" />
@@ -773,14 +781,11 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
       />
 
       {isTunnelsOpen && (
-        <TunnelsDialog
+        <TunnelsMenu
           sessionId={session.sessionId}
-          title={session.title}
           fallback={session.activePortForwards}
-          onClose={() => {
-            setIsTunnelsOpen(false);
-            termRef.current?.focus();
-          }}
+          trigger={tunnelsButtonRef}
+          onClose={closeTunnels}
         />
       )}
     </div>
