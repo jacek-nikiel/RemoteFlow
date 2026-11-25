@@ -5,29 +5,16 @@ import {
   Download,
   ShieldCheck,
   Volume2,
-  Copy,
   Check,
   RefreshCw,
-  ExternalLink,
   Maximize2,
   Minimize2,
-  AlertTriangle,
   Loader2,
   ZoomIn,
-  Clipboard,
-  ClipboardPaste,
   Tv,
   FolderSync,
-  FolderOpen,
-  Send,
   FileUp,
   X,
-  Folder,
-  File,
-  Upload,
-  ArrowUp,
-  HardDrive,
-  Trash2,
   Activity,
 } from 'lucide-react';
 import '@devolutions/iron-remote-desktop';
@@ -40,16 +27,18 @@ import {
   DroppedFile,
   FileInfo,
 } from '@devolutions/iron-remote-desktop-rdp';
-import { SessionInfo, SftpFileEntry } from '../../types';
+import { SessionInfo } from '../../types';
 import { api, isTauri, isWindowsHost } from '../../services/api';
-import { explainRdpError } from '../../utils/rdpErrors';
+import { formatBytes } from '../../utils/formatBytes';
 import { listen } from '@tauri-apps/api/event';
 import { useT } from '../../i18n';
 import { rdpPixelRatio, rdpScaleFactor, screenScale } from '../../utils/rdpDisplay';
 import { numLockFromEvent, trackNumLock } from '../../utils/rdpLockKeys';
 import { RdpStatsPanel } from './RdpStatsPanel';
 import { ensureRdpInitialized, hostPort } from './rdp/engine';
+import { FilesClipboardDrawer } from './rdp/FilesClipboardDrawer';
 import { KeySequenceMenu } from './rdp/KeySequenceMenu';
+import { RdpConnectingOverlay, RdpErrorOverlay } from './rdp/RdpOverlays';
 import {
   applyCanvasStyle,
   applyShadowRootScalingOverrides,
@@ -65,13 +54,6 @@ import {
 /** Remote -> local clipboard copies above this size are not downloaded automatically. */
 const REMOTE_CLIP_AUTO_LIMIT = 2 * 1024 * 1024 * 1024; // 2 GiB
 
-const formatBytes = (bytes: number): string => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-};
 
 interface Props {
   session: SessionInfo;
@@ -111,7 +93,6 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
 
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
   const [statusMessage, setStatusMessage] = useState<string>(t('Nawiązywanie połączenia RDP...'));
-  const [errorCopied, setErrorCopied] = useState(false);
   // Login exactly as sent to the server (user name and domain are normalised by the backend)
   const rdpLogin = session.rdpDomain ? `${session.rdpDomain}\\${session.username}` : session.username;
   const [copiedPassword, setCopiedPassword] = useState(false);
@@ -145,11 +126,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
 
   // Local folder/file browser inside RDP drawer for 1-click recursive folder sending
   const [isLocalBrowserOpen, setIsLocalBrowserOpen] = useState(false);
-  const [localCurrentPath, setLocalCurrentPath] = useState<string>('');
-  const [localEntries, setLocalEntries] = useState<SftpFileEntry[]>([]);
-  const [localLoading, setLocalLoading] = useState(false);
-
-  const rdpFileInputRef = useRef<HTMLInputElement>(null);
+  const localPathRef = useRef('');
 
   const showToast = useCallback((msg: string, duration = 3000) => {
     setClipboardFeedback(msg);
@@ -164,28 +141,6 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
       }
     } catch {}
   }, []);
-
-  // Load local directory for folder picker
-  const loadLocalDirectory = async (targetPath: string = '') => {
-    setLocalLoading(true);
-    try {
-      const res = await api.localListDir(targetPath);
-      setLocalCurrentPath(res.currentPath);
-      setLocalEntries(res.entries);
-    } catch (err) {
-      console.error('Błąd odczytu katalogu lokalnego:', err);
-    } finally {
-      setLocalLoading(false);
-    }
-  };
-
-  const handleLocalNavigateUp = () => {
-    if (!localCurrentPath || localCurrentPath === '/') return;
-    const parts = localCurrentPath.split('/').filter(Boolean);
-    parts.pop();
-    const parentPath = '/' + parts.join('/');
-    loadLocalDirectory(parentPath || '/');
-  };
 
   // Send text directly to WASM RDP Session clipboard (bypasses broken browser navigator.clipboard.read)
   const handleSendCustomTextToRemote = useCallback(async (text: string, notify = true) => {
@@ -1713,441 +1668,49 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
 
         {/* Unified Files & Clipboard Manager Drawer */}
         {isClipboardDrawerOpen && (
-          <div className="absolute top-0 right-0 bottom-0 w-full sm:w-[440px] bg-slate-950/95 border-l border-slate-800 shadow-2xl backdrop-blur-md flex flex-col z-40 transition-all font-sans text-xs animate-in slide-in-from-right duration-200">
-            <div className="flex h-11 items-center justify-between border-b border-slate-800 px-3 bg-slate-900/90 shrink-0">
-              <div className="flex items-center gap-2">
-                <FolderSync className="h-4 w-4 text-emerald-400" />
-                <span className="font-semibold text-white">{t('Transfer Plików, Katalogów i Schowek RDP')}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={handleClearClipboard}
-                  title={t('Wyczyść schowek (usuń przygotowane pliki, tekst oraz zresetuj schowek RDP)')}
-                  className="flex items-center gap-1 rounded bg-slate-800 hover:bg-rose-900/60 hover:border-rose-500/50 border border-slate-700 px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-rose-200 transition-colors"
-                >
-                  <Trash2 className="h-3 w-3 text-rose-400" />
-                  <span>{t('Wyczyść schowek')}</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setIsClipboardDrawerOpen(false);
-                    focusRdpCanvas();
-                  }}
-                  className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-3 flex-1 flex flex-col gap-3.5 overflow-y-auto">
-              {/* SECTION 1: Send Files & Directories to Windows */}
-              <div className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-white flex items-center gap-1.5">
-                    <Upload className="h-3.5 w-3.5 text-cyan-400" />
-                    <span>{t('1. Wyślij pliki lub katalogi do Windows')}</span>
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  {t('Wybierz pliki lub cały katalog poniżej (albo przeciągnij je na ekran RDP). Po wybraniu przejdź do okna Windows (np. na Pulpit lub do Eksploratora plików) i naciśnij Ctrl+V (prawy przycisk myszy → „Wklej”).')}
-                </p>
-
-                <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                  <button
-                    onClick={() => rdpFileInputRef.current?.click()}
-                    disabled={!isConnected || isSavingFiles}
-                    className="flex items-center gap-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors"
-                  >
-                    <Upload className="h-3 w-3" />
-                    <span>{t('Wybierz pliki...')}</span>
-                  </button>
-                  <input
-                    ref={rdpFileInputRef}
-                    type="file"
-                    multiple
-                    onChange={async (e) => {
-                      const files = e.target.files ? Array.from(e.target.files) : [];
-                      if (files.length > 0) {
-                        const dropped: DroppedFile[] = files.map((f) => ({
-                          file: f,
-                          name: f.name,
-                          size: f.size,
-                          lastModified: f.lastModified,
-                        }));
-                        await stageDroppedFilesToRdpClipboard(dropped);
-                      }
-                      e.target.value = '';
-                    }}
-                    className="hidden"
-                  />
-
-                  <button
-                    onClick={() => {
-                      const next = !isLocalBrowserOpen;
-                      setIsLocalBrowserOpen(next);
-                      if (next) loadLocalDirectory(localCurrentPath || '');
-                    }}
-                    disabled={!isConnected || isSavingFiles}
-                    className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
-                      isLocalBrowserOpen
-                        ? 'border-amber-500 bg-amber-950/70 text-amber-200'
-                        : 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200'
-                    }`}
-                  >
-                    <Folder className="h-3 w-3 text-amber-400" />
-                    <span>{t('Wybierz katalog...')}</span>
-                  </button>
-
-                  <button
-                    onClick={async () => {
-                      const clipFiles = await api.clipboardReadFiles();
-                      if (clipFiles.length > 0) {
-                        await stageLocalPathsToRdpClipboard(clipFiles);
-                      } else {
-                        showToast(t('Brak skopiowanych plików/katalogów w schowku Linux (użyj Ctrl+C w menedżerze plików)'));
-                      }
-                    }}
-                    disabled={!isConnected || isSavingFiles}
-                    className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 text-[11px] font-medium text-slate-200 transition-colors"
-                    title={t('Jeśli skopiowałeś plik lub katalog w systemie Linux (Ctrl+C), kliknij tutaj aby przekazać go do schowka Windows')}
-                  >
-                    <ClipboardPaste className="h-3 w-3 text-emerald-400" />
-                    <span>{t('Ze schowka Linux')}</span>
-                  </button>
-                </div>
-
-                {/* Built-in Local Folder Browser for 1-click recursive directory selection */}
-                {isLocalBrowserOpen && (
-                  <div className="mt-2 rounded-lg border border-amber-500/40 bg-slate-950 p-2 flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-semibold text-amber-300 flex items-center gap-1">
-                        <HardDrive className="h-3 w-3" />
-                        <span>{t('Kliknij „Wyślij katalog” przy wybranym folderze:')}</span>
-                      </span>
-                      <button
-                        onClick={async () => {
-                          const dir = await api.pickLocalFolder();
-                          if (dir) await stageLocalPathsToRdpClipboard([dir]);
-                        }}
-                        className="rounded border border-amber-500/40 bg-amber-950/60 hover:bg-amber-900 px-2 py-0.5 text-[10px] text-amber-200"
-                      >
-                        {t('Okno systemowe...')}
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={handleLocalNavigateUp}
-                        disabled={!localCurrentPath || localCurrentPath === '/' || localLoading}
-                        className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
-                      >
-                        <ArrowUp className="h-3 w-3" />
-                      </button>
-                      <input
-                        type="text"
-                        value={localCurrentPath}
-                        onChange={(e) => setLocalCurrentPath(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') loadLocalDirectory(localCurrentPath);
-                        }}
-                        className="flex-1 h-6 rounded border border-slate-700 bg-slate-900 px-2 font-mono text-[10px] text-slate-200"
-                      />
-                      {localCurrentPath.split('/').filter(Boolean).length > 2 && (
-                        <button
-                          onClick={() => stageLocalPathsToRdpClipboard([localCurrentPath])}
-                          className="rounded bg-emerald-600 hover:bg-emerald-500 px-2 py-1 text-[10px] font-semibold text-white shrink-0"
-                        >
-                          {t('Wyślij ten katalog')}
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="max-h-40 overflow-y-auto divide-y divide-slate-800/50 rounded border border-slate-800">
-                      {localLoading ? (
-                        <div className="flex items-center justify-center py-4 text-slate-400 gap-1.5">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />
-                          <span>Wczytywanie...</span>
-                        </div>
-                      ) : (
-                        localEntries.map((item) => (
-                          <div
-                            key={item.path}
-                            className="flex items-center justify-between px-2 py-1 hover:bg-slate-900"
-                          >
-                            <div
-                              onClick={() => {
-                                if (item.isDir) loadLocalDirectory(item.path);
-                              }}
-                              className={`flex items-center gap-1.5 min-w-0 flex-1 ${
-                                item.isDir ? 'cursor-pointer text-amber-200 hover:text-amber-300' : 'text-slate-400'
-                              }`}
-                            >
-                              {item.isDir ? (
-                                <Folder className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-                              ) : (
-                                <File className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                              )}
-                              <span className="truncate text-[11px]">{item.name}</span>
-                            </div>
-                            <button
-                              onClick={() => stageLocalPathsToRdpClipboard([item.path])}
-                              className={`ml-2 rounded px-2 py-0.5 text-[10px] font-medium shrink-0 ${
-                                item.isDir
-                                  ? 'bg-amber-600 hover:bg-amber-500 text-white'
-                                  : 'bg-slate-800 hover:bg-cyan-600 text-slate-200'
-                              }`}
-                            >
-                              {item.isDir ? t('Wyślij katalog') : t('Wyślij plik')}
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Download files copied from Windows */}
-                {remoteAvailableFiles.length > 0 ? (
-                  <div className="mt-2 rounded-lg border border-cyan-500/60 bg-cyan-950/60 p-2.5 flex flex-col gap-2 shadow-sm animate-in fade-in duration-150">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-cyan-200 flex items-center gap-1.5">
-                        <Download className="h-3.5 w-3.5 text-cyan-400" />
-                        <span>{t('Skopiowano w sesji Windows ({n}):', { n: remoteAvailableFiles.length })}</span>
-                      </span>
-                      <button
-                        onClick={() => setRemoteAvailableFiles([])}
-                        className="text-slate-400 hover:text-white p-0.5"
-                        title={t('Wyczyść listę')}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                    <div className="max-h-28 overflow-y-auto text-[10px] font-mono text-slate-300 space-y-1 rounded bg-slate-950/80 p-2 border border-slate-800">
-                      {remoteAvailableFiles.map((f, idx) => (
-                        <div key={idx} className="flex items-center justify-between truncate">
-                          <span className="truncate">{f.path ? `${f.path}\\${f.name}` : f.name}</span>
-                          <span className="text-slate-500 ml-2">{formatBytes(f.size)}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      onClick={handleDownloadRemoteFiles}
-                      disabled={isDownloadingRemoteFiles}
-                      className="flex items-center justify-center gap-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 py-2 text-[11px] font-semibold text-white shadow-xs transition-colors"
-                    >
-                      {isDownloadingRemoteFiles ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Download className="h-3.5 w-3.5" />
-                      )}
-                      <span>{t('Pobierz na komputer (~/RemoteFlow_Shared)')}</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div className="mt-1 rounded border border-slate-800/80 bg-slate-950/40 p-2 text-[10px] text-slate-400 leading-relaxed">
-                    <span className="text-slate-300 font-medium">{t('Kopiowanie z Windows na komputer:')}</span>{' '}
-                    {t('zaznacz plik w sesji Windows i naciśnij Ctrl+C. Na głównym pasku połączenia pojawi się informacja, a w tym menu uaktywni się przycisk „Pobierz na komputer”.')}
-                  </div>
-                )}
-              </div>
-
-              {/* SECTION 2: Text Clipboard Sync */}
-              <div className="flex flex-col gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-white flex items-center gap-1.5">
-                    <Clipboard className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>{t('2. Schowek tekstowy (Linux ↔ Windows)')}</span>
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {clipboardDraft && (
-                      <button
-                        onClick={() => setClipboardDraft('')}
-                        className="text-[10px] text-slate-400 hover:text-rose-300 transition-colors"
-                      >
-                        {t('Wyczyść')}
-                      </button>
-                    )}
-                    <button
-                      onClick={async () => {
-                        const text = await api.clipboardReadText();
-                        if (text) {
-                          setClipboardDraft(text);
-                          showToast(t('Wczytano tekst ze schowka systemowego'));
-                        }
-                      }}
-                      className="text-[10px] text-cyan-400 hover:underline"
-                    >
-                      {t('Wczytaj ze schowka Linux')}
-                    </button>
-                  </div>
-                </div>
-                <textarea
-                  value={clipboardDraft}
-                  onChange={(e) => setClipboardDraft(e.target.value)}
-                  placeholder={t('Wpisz lub wklej tekst, hasło lub polecenie PowerShell/CMD...')}
-                  rows={3}
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 font-mono text-[11px] text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleSendCustomTextToRemote(clipboardDraft, true)}
-                    disabled={!clipboardDraft}
-                    className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 py-1.5 text-white font-medium shadow-xs transition-colors"
-                  >
-                    <Send className="h-3 w-3" />
-                    <span>{t('Wyślij do schowka Windows')}</span>
-                  </button>
-                  <button
-                    onClick={async () => {
-                      await handleSendCustomTextToRemote(clipboardDraft, true);
-                      setTimeout(() => {
-                        userInteractionRef.current?.ctrlV();
-                      }, 120);
-                    }}
-                    disabled={!clipboardDraft}
-                    className="flex items-center gap-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 px-3 py-1.5 text-white font-medium shadow-xs transition-colors"
-                  >
-                    <ClipboardPaste className="h-3 w-3" />
-                    <span>{t('Wyślij i wklej (Ctrl+V)')}</span>
-                  </button>
-                </div>
-
-                {/* Remote Clipboard Text Preview */}
-                {remoteClipboardText && (
-                  <div className="flex flex-col gap-1 pt-2 mt-1 border-t border-slate-800">
-                    <span className="font-medium text-slate-400 text-[10px]">
-                      {t('Ostatnio skopiowano w sesji Windows (automatycznie w schowku Linux):')}
-                    </span>
-                    <div className="rounded border border-slate-800 bg-slate-950 p-2 font-mono text-[10px] text-slate-300 max-h-20 overflow-y-auto whitespace-pre-wrap select-all">
-                      {remoteClipboardText}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* SECTION 3: Where to find shared folder in Windows */}
-              <div className="mt-auto rounded-lg border border-cyan-500/30 bg-cyan-950/25 p-2.5 text-[11px] text-cyan-200 flex flex-col gap-1.5">
-                <div className="flex items-center gap-1.5 font-semibold text-white">
-                  <FolderSync className="h-4 w-4 text-cyan-400" />
-                  <span>{t('Gdzie szukać plików w systemie Windows?')}</span>
-                </div>
-                <ul className="text-[10px] text-cyan-200/90 space-y-1 list-disc pl-4 leading-relaxed">
-                  <li>
-                    <strong>{t('W zakładce aplikacji (widok wbudowany):')}</strong>{' '}
-                    {t('po wybraniu lub upuszczeniu pliku/katalogu użyj Ctrl+V (Wklej) w dowolnym folderze Eksploratora Windows lub na Pulpicie.')}
-                  </li>
-                  <li>
-                    <strong>{t('W oknie zewnętrznym FreeRDP:')}</strong>{' '}
-                    {t('folder ~/RemoteFlow_Shared jest widoczny w Eksploratorze plików w sekcji „Ten komputer” (a nie w „Sieć”) jako dysk RemoteFlow lub pod adresem \\\\tsclient\\RemoteFlow.')}
-                  </li>
-                </ul>
-                <div className="flex items-center gap-1.5 mt-1">
-                  <button
-                    onClick={handleOpenSharedFolder}
-                    className="flex-1 flex items-center justify-center gap-1 rounded border border-cyan-500/40 bg-cyan-900/50 hover:bg-cyan-800/60 py-1 text-[10px] font-medium text-cyan-100 transition-colors"
-                  >
-                    <FolderOpen className="h-3 w-3" />
-                    <span>{t('Otwórz ~/RemoteFlow_Shared')}</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      handleSendCustomTextToRemote('\\\\tsclient\\RemoteFlow', true);
-                      api.clipboardWriteText('\\\\tsclient\\RemoteFlow');
-                    }}
-                    className="flex items-center justify-center gap-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2 py-1 text-[10px] font-mono text-slate-200 transition-colors"
-                    title={t('Skopiuj ścieżkę \\\\tsclient\\RemoteFlow do schowka Windows')}
-                  >
-                    <Copy className="h-2.5 w-2.5" />
-                    <span>\\tsclient\RemoteFlow</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <FilesClipboardDrawer
+            onClose={() => {
+              setIsClipboardDrawerOpen(false);
+              focusRdpCanvas();
+            }}
+            handleClearClipboard={handleClearClipboard}
+            isConnected={isConnected}
+            isSavingFiles={isSavingFiles}
+            stageDroppedFilesToRdpClipboard={stageDroppedFilesToRdpClipboard}
+            stageLocalPathsToRdpClipboard={stageLocalPathsToRdpClipboard}
+            isLocalBrowserOpen={isLocalBrowserOpen}
+            setIsLocalBrowserOpen={setIsLocalBrowserOpen}
+            localPathRef={localPathRef}
+            remoteAvailableFiles={remoteAvailableFiles}
+            setRemoteAvailableFiles={setRemoteAvailableFiles}
+            handleDownloadRemoteFiles={handleDownloadRemoteFiles}
+            isDownloadingRemoteFiles={isDownloadingRemoteFiles}
+            clipboardDraft={clipboardDraft}
+            setClipboardDraft={setClipboardDraft}
+            handleSendCustomTextToRemote={handleSendCustomTextToRemote}
+            pasteToRemote={() => userInteractionRef.current?.ctrlV()}
+            remoteClipboardText={remoteClipboardText}
+            handleOpenSharedFolder={handleOpenSharedFolder}
+            showToast={showToast}
+          />
         )}
 
         {isStatsOpen && isConnected && <RdpStatsPanel onClose={() => setIsStatsOpen(false)} />}
 
         {/* Loading / Connecting Overlay */}
-        {isConnecting && (
-          <div role="status" className="absolute inset-0 bg-rdp-bg flex flex-col items-center justify-center z-10 p-6 text-center">
-            <div className="relative flex items-center justify-center mb-4">
-              <div className="h-16 w-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shadow-xl shadow-blue-500/10">
-                <Monitor className="h-8 w-8 animate-pulse" />
-              </div>
-              <Loader2 className="absolute -bottom-1 -right-1 h-6 w-6 text-cyan-400 animate-spin" />
-            </div>
-            <h3 className="text-base font-semibold text-white tracking-tight">{t('Łączenie z {title}', { title: session.title })}</h3>
-            <p className="mt-1 font-mono text-xs text-slate-400">
-              {rdpLogin}@{session.host}:{session.port}
-            </p>
-            <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-slate-900 border border-slate-800 px-3 py-1 text-[11px] text-cyan-300">
-              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping" />
-              <span>{statusMessage}</span>
-            </div>
-          </div>
-        )}
+        {isConnecting && <RdpConnectingOverlay session={session} rdpLogin={rdpLogin} statusMessage={statusMessage} />}
 
         {/* Error / Disconnected Overlay */}
         {(isError || status === 'disconnected') && (
-          <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center z-10 p-6 text-center">
-            <div className="h-14 w-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 shadow-xl shadow-red-500/10 mb-4">
-              <AlertTriangle className="h-7 w-7" />
-            </div>
-            <h3 className="text-base font-bold text-white tracking-tight">
-              {isError ? t('Błąd połączenia z sesją RDP') : t('Sesja RDP zakończona')}
-            </h3>
-            <div className="relative mt-1 max-w-md my-2">
-              <p className="select-text cursor-text break-words text-xs text-slate-400 leading-relaxed font-mono bg-slate-900/80 border border-slate-800 p-2.5 pr-8 rounded-lg">
-                {statusMessage}
-              </p>
-              <button
-                type="button"
-                title={t('Kopiuj treść błędu')}
-                onClick={() => {
-                  api.clipboardWriteText(statusMessage).catch(() => {});
-                  setErrorCopied(true);
-                  setTimeout(() => setErrorCopied(false), 1500);
-                }}
-                className="absolute right-1.5 top-1.5 rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-white"
-              >
-                {errorCopied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-              </button>
-            </div>
-            {isError && explainRdpError(statusMessage) && (
-              <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-left text-xs leading-relaxed text-amber-200">
-                {explainRdpError(statusMessage)}
-                <div className="mt-1.5 text-amber-300/80">
-                  {t('Wysłany login:')} <span className="select-text font-mono text-amber-100">{rdpLogin}</span>
-                </div>
-              </div>
-            )}
-            <div className="mt-4 flex items-center gap-3">
-              <button
-                onClick={() => setConnectionAttempts((c) => c + 1)}
-                className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 shadow-lg shadow-blue-600/20 transition-all"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                <span>{t('Połącz ponownie')}</span>
-              </button>
-              <button
-                onClick={handleLaunchExternal}
-                disabled={isLaunchingExternal}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition-all"
-              >
-                <ExternalLink className="h-3.5 w-3.5 text-purple-400" />
-                <span>{t('Otwórz w FreeRDP')}</span>
-              </button>
-              <button
-                onClick={handleDownloadRdp}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              >
-                <Download className="h-3.5 w-3.5" />
-                <span>{t('Zapisz .rdp…')}</span>
-              </button>
-            </div>
-          </div>
+          <RdpErrorOverlay
+            isError={isError}
+            statusMessage={statusMessage}
+            rdpLogin={rdpLogin}
+            onReconnect={() => setConnectionAttempts((c) => c + 1)}
+            handleLaunchExternal={handleLaunchExternal}
+            isLaunchingExternal={isLaunchingExternal}
+            handleDownloadRdp={handleDownloadRdp}
+          />
         )}
       </div>
     </div>
