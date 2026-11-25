@@ -21,7 +21,7 @@ jobs:
     outputs:
       release_id: ${{ steps.release.outputs.result }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check that the tag matches the version and the updater key is set
         run: |
@@ -36,7 +36,7 @@ jobs:
 
       - name: Create draft release
         id: release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -62,16 +62,16 @@ jobs:
           - platform: ubuntu-22.04
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Linux build dependencies
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config file patchelf libssl-dev libwebkit2gtk-4.1-dev \
+          sudo apt-get install -y build-essential pkg-config file patchelf libarchive-tools zstd libssl-dev libwebkit2gtk-4.1-dev \
             libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -128,7 +128,7 @@ jobs:
           ls -l portable
 
       - name: Portable program – upload
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -143,13 +143,40 @@ jobs:
               });
             }
 
+      # Arch Linux package (pacman) with the same program. Deliberately a separate step without the
+      # signing key: pacman packages are installed by pacman, not by the in-app updater.
+      - name: Arch Linux package – build
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          bash scripts/build-arch-pkg.sh src-tauri/target/release/remoteflow archpkg
+          ls -l archpkg
+
+      - name: Arch Linux package – upload
+        if: startsWith(matrix.platform, 'ubuntu')
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            for (const name of fs.readdirSync('archpkg')) {
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: Number('${{ needs.create-release.outputs.release_id }}'),
+                name,
+                data: fs.readFileSync(`archpkg/${name}`),
+                headers: { 'content-type': 'application/octet-stream' },
+              });
+            }
+
   # Adds the portable programs to latest.json (after both builds have uploaded their part of it)
   portable-manifest:
     needs: [create-release, build]
     runs-on: ubuntu-22.04
     steps:
       - name: Add portable entries to latest.json
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -187,13 +214,13 @@ jobs:
   tests:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev \
             libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm

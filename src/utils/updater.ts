@@ -19,12 +19,15 @@ export interface AvailableUpdate {
   notes: string;
   date?: string;
   /**
-   * The update can be installed from the notice. False only for a portable copy when the release
-   * has no portable build for this system – then the notice links to the releases page.
+   * The update can be installed from the notice. False for a portable copy when the release has no
+   * portable build for this system, and for a pacman package (Arch Linux) – then the notice links
+   * to the releases page.
    */
   canSelfUpdate: boolean;
   /** Portable copy: the program file itself is replaced (no installer). */
   portable: boolean;
+  /** Installed from a pacman package (.pkg.tar.zst / AUR): updated with pacman, not by the program. */
+  pacman: boolean;
   /** Downloads, verifies and installs; `onProgress(downloaded, total)` while downloading. */
   install: (onProgress: (downloaded: number, total: number | null) => void) => Promise<void>;
 }
@@ -68,7 +71,7 @@ export function skipVersion(version: string | null): void {
 
 interface InstallInfo {
   canSelfUpdate: boolean;
-  kind: 'nsis' | 'msi' | 'appimage' | 'package' | 'portable';
+  kind: 'nsis' | 'msi' | 'appimage' | 'package' | 'pacman' | 'portable';
 }
 
 interface PortableUpdateInfo {
@@ -100,6 +103,7 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
         date: portable.date ?? undefined,
         canSelfUpdate: true,
         portable: true,
+        pacman: false,
         install: async (onProgress) => {
           const channel = new Channel<{ downloaded: number; total: number | null }>();
           channel.onmessage = (p) => onProgress(p.downloaded, p.total);
@@ -121,6 +125,7 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
     date: update.date,
     canSelfUpdate,
     portable: info?.kind === 'portable',
+    pacman: info?.kind === 'pacman',
     install: async (onProgress) => {
       let downloaded = 0;
       let total: number | null = null;

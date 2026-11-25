@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { ConnectionPasswordStatus, PasswordPromptCancelled, requestConnectionPassword } from '../utils/passwordPrompt';
-import { getLang } from '../i18n';
+import { t } from '../i18n';
 import { selectExportData } from '../utils/exportScope';
 import { effectiveSshAuthType } from '../utils/sshAuth';
 import { forgetOscCwd } from '../utils/terminalCwd';
@@ -385,7 +385,7 @@ export const api = {
     const index = mockConnections.findIndex((connection) => connection.id === connectionId);
     if (index < 0) throw new Error('Connection not found');
     const source = mockConnections[index];
-    const label = getLang() === 'en' ? 'copy' : 'kopia';
+    const label = t('kopia');
     const names = new Set(mockConnections.map((connection) => connection.name.toLocaleLowerCase()));
     let name = `${source.name} (${label})`;
     let number = 2;
@@ -517,7 +517,7 @@ export const api = {
       });
     }
     if (groupIds !== null && ((!groupIds.length && !includeUngrouped) || groupIds.some((id) => !mockGroups.some((group) => group.id === id)))) {
-      throw new Error(getLang() === 'en' ? 'Select valid export groups' : 'Wybierz poprawne grupy do eksportu');
+      throw new Error(t('Wybierz poprawne grupy do eksportu'));
     }
     const selected = selectExportData(mockGroups, mockConnections, groupIds, includeUngrouped);
     const credentialIds = new Set(selected.connections.map((connection) => connection.credentialId));

@@ -21,7 +21,7 @@ use tauri_plugin_updater::UpdaterExt;
 pub struct InstallInfo {
     /// The updater plugin can install new versions in place (installer / AppImage / package).
     pub can_self_update: bool,
-    /// "nsis" | "msi" | "appimage" | "package" | "portable"
+    /// "nsis" | "msi" | "appimage" | "package" | "pacman" | "portable"
     pub kind: &'static str,
 }
 
@@ -29,7 +29,28 @@ fn has_marker(program_dir: Option<&Path>) -> bool {
     program_dir.is_some_and(|d| d.join(crate::vault::storage::PORTABLE_MARKER).is_file())
 }
 
-fn classify(program_dir: Option<&Path>, exe: Option<&Path>, appimage: bool, program_files: &[&Path]) -> InstallInfo {
+/// pacman's database of installed packages (Arch Linux and derivatives).
+const PACMAN_LOCAL_DB: &str = "/var/lib/pacman/local";
+
+/// The program file belongs to a pacman package (the release's .pkg.tar.zst or an AUR package):
+/// a `remoteflow*` entry of the local database lists it in its `files`.
+fn owned_by_pacman(db: &Path, exe: &Path) -> bool {
+    let Ok(rel) = exe.strip_prefix("/") else { return false };
+    let rel = rel.to_string_lossy();
+    let Ok(entries) = std::fs::read_dir(db) else { return false };
+    entries.flatten().any(|entry| {
+        entry.file_name().to_string_lossy().starts_with("remoteflow")
+            && std::fs::read_to_string(entry.path().join("files")).is_ok_and(|files| files.lines().any(|line| line == rel))
+    })
+}
+
+fn classify(
+    program_dir: Option<&Path>,
+    exe: Option<&Path>,
+    appimage: bool,
+    program_files: &[&Path],
+    pacman_db: Option<&Path>,
+) -> InstallInfo {
     let portable = InstallInfo { can_self_update: false, kind: "portable" };
     if cfg!(windows) {
         // Explicit portable mode (also used for the vault location)
@@ -55,8 +76,13 @@ fn classify(program_dir: Option<&Path>, exe: Option<&Path>, appimage: bool, prog
         if has_marker(program_dir) {
             return portable;
         }
-        // .deb / .rpm install the program into /usr/bin
-        if exe.is_some_and(|e| e.starts_with("/usr/")) {
+        // .deb / .rpm / pacman install the program into /usr/bin
+        if let Some(exe) = exe.filter(|e| e.starts_with("/usr/")) {
+            // The updater plugin knows only .deb / .rpm / AppImage – a pacman package is updated
+            // with pacman (the notice links to the releases page)
+            if pacman_db.is_some_and(|db| owned_by_pacman(db, exe)) {
+                return InstallInfo { can_self_update: false, kind: "pacman" };
+            }
             return InstallInfo { can_self_update: true, kind: "package" };
         }
         portable
@@ -71,7 +97,13 @@ fn install_info() -> InstallInfo {
         .filter_map(|k| std::env::var_os(k).map(PathBuf::from))
         .collect();
     let pf_refs: Vec<&Path> = pf.iter().map(|p| p.as_path()).collect();
-    classify(crate::vault::storage::program_dir().as_deref(), exe.as_deref(), appimage, &pf_refs)
+    classify(
+        crate::vault::storage::program_dir().as_deref(),
+        exe.as_deref(),
+        appimage,
+        &pf_refs,
+        Some(Path::new(PACMAN_LOCAL_DB)),
+    )
 }
 
 #[tauri::command]
@@ -252,25 +284,48 @@ mod tests {
         let base = temp_dir("kinds");
         let exe = base.join("remoteflow");
         if cfg!(windows) {
-            assert_eq!(classify(Some(&base), Some(&exe), false, &[]).kind, "portable");
+            assert_eq!(classify(Some(&base), Some(&exe), false, &[], None).kind, "portable");
             std::fs::write(base.join("uninstall.exe"), "").unwrap();
-            assert_eq!(classify(Some(&base), Some(&exe), false, &[]).kind, "nsis");
+            assert_eq!(classify(Some(&base), Some(&exe), false, &[], None).kind, "nsis");
             std::fs::remove_file(base.join("uninstall.exe")).unwrap();
-            assert_eq!(classify(Some(&base), Some(&exe), false, &[base.parent().unwrap()]).kind, "msi");
+            assert_eq!(classify(Some(&base), Some(&exe), false, &[base.parent().unwrap()], None).kind, "msi");
             // The portable marker wins
             std::fs::write(base.join(crate::vault::storage::PORTABLE_MARKER), "").unwrap();
-            assert_eq!(classify(Some(&base), Some(&exe), false, &[base.parent().unwrap()]).kind, "portable");
+            assert_eq!(classify(Some(&base), Some(&exe), false, &[base.parent().unwrap()], None).kind, "portable");
         } else {
-            assert_eq!(classify(Some(&base), Some(&exe), false, &[]).kind, "portable");
-            assert!(classify(Some(&base), Some(&exe), true, &[]).can_self_update);
-            assert_eq!(classify(Some(Path::new("/usr/bin")), Some(Path::new("/usr/bin/remoteflow")), false, &[]).kind, "package");
+            assert_eq!(classify(Some(&base), Some(&exe), false, &[], None).kind, "portable");
+            assert!(classify(Some(&base), Some(&exe), true, &[], None).can_self_update);
+            assert_eq!(classify(Some(Path::new("/usr/bin")), Some(Path::new("/usr/bin/remoteflow")), false, &[], None).kind, "package");
             // Marker: a loose binary is portable, an AppImage is still replaced as a whole
             std::fs::write(base.join(crate::vault::storage::PORTABLE_MARKER), "").unwrap();
-            let info = classify(Some(&base), Some(&exe), false, &[]);
+            let info = classify(Some(&base), Some(&exe), false, &[], None);
             assert_eq!(info, InstallInfo { can_self_update: false, kind: "portable" });
-            assert_eq!(classify(Some(&base), Some(&exe), true, &[]).kind, "appimage");
+            assert_eq!(classify(Some(&base), Some(&exe), true, &[], None).kind, "appimage");
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn pacman_package() {
+        let db = temp_dir("pacman");
+        let exe = Path::new("/usr/bin/remoteflow");
+        let kind = |db: &Path| classify(Some(Path::new("/usr/bin")), Some(exe), false, &[], Some(db)).kind;
+        // No database entry (e.g. Debian with pacman installed): still a .deb / .rpm
+        assert_eq!(kind(&db), "package");
+        assert_eq!(kind(Path::new("/nonexistent/pacman/local")), "package");
+        // Another package's entry does not count
+        std::fs::create_dir_all(db.join("other-1.0-1")).unwrap();
+        std::fs::write(db.join("other-1.0-1/files"), "%FILES%\nusr/\nusr/bin/\nusr/bin/remoteflow\n").unwrap();
+        assert_eq!(kind(&db), "package");
+        // Our package (or an AUR one) listing the program file
+        std::fs::create_dir_all(db.join("remoteflow-bin-1.16.0-1")).unwrap();
+        std::fs::write(db.join("remoteflow-bin-1.16.0-1/files"), "%FILES%\nusr/\nusr/bin/\nusr/bin/remoteflow\n").unwrap();
+        assert_eq!(kind(&db), "pacman");
+        assert!(!classify(Some(Path::new("/usr/bin")), Some(exe), false, &[], Some(&db)).can_self_update);
+        // Outside /usr (portable copy) the database is not consulted
+        let home_exe = db.join("remoteflow");
+        assert_eq!(classify(Some(&db), Some(&home_exe), false, &[], Some(&db)).kind, "portable");
+        let _ = std::fs::remove_dir_all(&db);
     }
 
     #[test]

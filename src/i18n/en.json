@@ -971,5 +971,9 @@
   "Edytuj (F4)": "Edit (F4)",
   "Edytuj": "Edit",
   "Tylko podgląd – F4 lub „Edytuj”, aby zmieniać": "View only – press F4 or “Edit” to make changes",
-  "Ctrl+F – szukaj, F4 – edytuj, F3/Esc – zamknij": "Ctrl+F – find, F4 – edit, F3/Esc – close"
+  "Ctrl+F – szukaj, F4 – edytuj, F3/Esc – zamknij": "Ctrl+F – find, F4 – edit, F3/Esc – close",
+  "kopia": "copy",
+  "Wybierz poprawne grupy do eksportu": "Select valid export groups",
+  "Anulowano połączenie": "Connection cancelled",
+  "Program zainstalowano z paczki Arch Linux – pobierz nową paczkę .pkg.tar.zst ze strony wydań i zainstaluj ją poleceniem „sudo pacman -U …” (paczkę z AUR zaktualizuj swoim pomocnikiem AUR). Dane i ustawienia zostaną zachowane.": "Installed from an Arch Linux package – download the new .pkg.tar.zst package from the releases page and install it with “sudo pacman -U …” (update an AUR package with your AUR helper). Your data and settings are kept."
 }

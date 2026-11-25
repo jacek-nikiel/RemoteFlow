@@ -17,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NO_STRIP=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates curl wget file pkg-config xdg-utils patchelf \
+        build-essential ca-certificates curl wget file pkg-config xdg-utils patchelf libarchive-tools zstd \
         libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
         libjavascriptcoregtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
@@ -66,7 +66,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp src-tauri/icons/icon.png /out/remoteflow.png \
     && cp src-tauri/target/release/bundle/deb/*.deb /out/ \
     && cp src-tauri/target/release/bundle/rpm/*.rpm /out/ \
-    && cp src-tauri/target/release/bundle/appimage/*.AppImage /out/
+    && cp src-tauri/target/release/bundle/appimage/*.AppImage /out/ \
+    && bash scripts/build-arch-pkg.sh src-tauri/target/release/remoteflow /out
 
 # Only the build results end up in the output directory.
 FROM scratch AS export

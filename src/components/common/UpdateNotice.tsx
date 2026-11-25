@@ -103,7 +103,9 @@ export const UpdateNotice: React.FC<{ activeSessions: number }> = ({ activeSessi
 
       {!update.canSelfUpdate && (
         <div className="mb-3 rounded-lg border border-slate-700 bg-slate-950/60 p-2 text-[11px] text-slate-300">
-          {t('To jest kopia przenośna – pobierz nową wersję ze strony wydań i zastąp nią obecny plik programu (dane i ustawienia zostaną zachowane).')}
+          {update.pacman
+            ? t('Program zainstalowano z paczki Arch Linux – pobierz nową paczkę .pkg.tar.zst ze strony wydań i zainstaluj ją poleceniem „sudo pacman -U …” (paczkę z AUR zaktualizuj swoim pomocnikiem AUR). Dane i ustawienia zostaną zachowane.')
+            : t('To jest kopia przenośna – pobierz nową wersję ze strony wydań i zastąp nią obecny plik programu (dane i ustawienia zostaną zachowane).')}
         </div>
       )}
 

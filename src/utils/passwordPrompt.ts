@@ -1,4 +1,4 @@
-import { getLang } from '../i18n';
+import { t } from '../i18n';
 
 export interface ConnectionPasswordStatus {
   connectionId: string;
@@ -30,5 +30,5 @@ export function requestConnectionPassword(status: ConnectionPasswordStatus): Pro
 }
 
 export class PasswordPromptCancelled extends Error {
-  constructor() { super(getLang() === 'en' ? 'Connection cancelled' : 'Anulowano połączenie'); }
+  constructor() { super(t('Anulowano połączenie')); }
 }

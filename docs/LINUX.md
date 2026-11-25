@@ -79,6 +79,7 @@ sudo pacman -S --needed freerdp xorg-xwayland which
 ## Packages and portable builds
 
 - Install a `.deb` with `sudo apt install ./remoteflow_VERSION_amd64.deb` so APT can resolve its declared dependencies. Package names vary between distributions; the lists above also cover the portable binary.
+- On CachyOS / Arch Linux install the release package with `sudo pacman -U ./remoteflow-VERSION-1-x86_64.pkg.tar.zst` – pacman installs the required libraries; RDP, file pickers and clipboard helpers are optional dependencies (`pacman -Qi remoteflow`, packages listed above). A new version is installed the same way; the program only announces it.
 - For the portable binary, run `chmod +x ./remoteflow`, then `./remoteflow`. Add its menu entry and icon using the [portable desktop integration instructions](../README.md#linux-portable-desktop-icon).
 - AppImage bundles many libraries, but still depends on the host's graphics stack and compatible glibc. If it reports a FUSE 2 error, install the appropriate package from the table. If supported by that AppImage, `./RemoteFlow.AppImage --appimage-extract-and-run` is an alternative.
 
