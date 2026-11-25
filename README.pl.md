@@ -45,7 +45,7 @@ Aplikacja wykorzystuje **Tauri 2 i Rust** jako natywny backend, **React 19 i Typ
 - Przycisk „katalog z terminala”: panel serwera przechodzi do katalogu, w którym jesteś w terminalu SSH (także w zagnieżdżonej powłoce i gdy działa w niej program; nic nie jest wpisywane do terminala). Serwery Linux (`/proc`); na innych systemach używany jest katalog zgłaszany przez powłokę (OSC 7), jeśli jest dostępny.
 
 ### RDP
-- Wbudowany klient RDP (IronRDP skompilowany do WebAssembly) działający przez lokalne proxy – rozdzielczość automatycznie dopasowuje się do okna.
+- Wbudowany klient RDP (IronRDP skompilowany do WebAssembly) działający przez lokalne proxy – rozdzielczość automatycznie dopasowuje się do okna, ostro także przy skalowaniu ekranu (4K, 150–200%: pełna rozdzielczość i współczynnik skalowania dla serwera, jak w kliencie Microsoft).
 - TLS z przypinaniem certyfikatu; automatyczne przejście na systemowy stos TLS (Schannel / OpenSSL) dla starszych serwerów, np. Windows Server 2012.
 - Konta domenowe: `użytkownik` + pole „Domena”, `DOMENA\użytkownik`, UPN `użytkownik@domena.local` lub `.\konto` dla konta lokalnego – tak samo dla wbudowanego klienta, FreeRDP i mstsc.
 - Schowek tekstowy w obie strony. Na Windows pliki skopiowane w sesji zdalnej można od razu wkleić w Eksploratorze (i odwrotnie); na Linuksie pliki są wymieniane przez folder współdzielony. Schowek można wyłączyć dla wybranego połączenia (dotyczy wbudowanego klienta, FreeRDP i mstsc). Dyski lokalne i katalog domowy nigdy nie są udostępniane serwerowi – FreeRDP udostępnia tylko wydzielony folder wymiany `~/RemoteFlow_Shared`.

@@ -667,7 +667,6 @@
   "Zmień kod PIN": "Change the PIN",
   "Zmień Master Password": "Change the Master Password",
   "Zmień rozdzielczość pulpitu zdalnego w czasie rzeczywistym": "Change the remote desktop resolution in real time",
-  "Zmień skalowanie pulpitu (obecnie: {mode})": "Change desktop scaling (now: {mode})",
   "Zmodyfikowano": "Modified",
   "Zostanie rozłączonych wszystkich {length} aktywnych sesji.": "All {length} active sessions will be disconnected.",
   "Zostanie rozłączonych {count} pozostałych sesji (bieżąca pozostanie otwarta).": "{count} other sessions will be disconnected (the current one stays open).",
@@ -975,5 +974,7 @@
   "kopia": "copy",
   "Wybierz poprawne grupy do eksportu": "Select valid export groups",
   "Anulowano połączenie": "Connection cancelled",
-  "Program zainstalowano z paczki Arch Linux – pobierz nową paczkę .pkg.tar.zst ze strony wydań i zainstaluj ją poleceniem „sudo pacman -U …” (paczkę z AUR zaktualizuj swoim pomocnikiem AUR). Dane i ustawienia zostaną zachowane.": "Installed from an Arch Linux package – download the new .pkg.tar.zst package from the releases page and install it with “sudo pacman -U …” (update an AUR package with your AUR helper). Your data and settings are kept."
+  "Program zainstalowano z paczki Arch Linux – pobierz nową paczkę .pkg.tar.zst ze strony wydań i zainstaluj ją poleceniem „sudo pacman -U …” (paczkę z AUR zaktualizuj swoim pomocnikiem AUR). Dane i ustawienia zostaną zachowane.": "Installed from an Arch Linux package – download the new .pkg.tar.zst package from the releases page and install it with “sudo pacman -U …” (update an AUR package with your AUR helper). Your data and settings are kept.",
+  "Rozdzielczość: {width} × {height}, skalowanie {scale}%": "Resolution: {width} × {height}, scaling {scale}%",
+  "Sesja RDP aktywna ({width} × {height}, skalowanie {scale}%)": "RDP session active ({width} × {height}, scaling {scale}%)"
 }

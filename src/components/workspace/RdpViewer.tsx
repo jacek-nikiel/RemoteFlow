@@ -49,6 +49,7 @@ import { explainRdpError } from '../../utils/rdpErrors';
 import { listen } from '@tauri-apps/api/event';
 import { useT } from '../../i18n';
 import { installRdpCanvasBatching } from '../../utils/rdpCanvasBatching';
+import { rdpPixelRatio, rdpScaleFactor, screenScale } from '../../utils/rdpDisplay';
 import { installNumLockModifierFix, numLockFromEvent, trackNumLock } from '../../utils/rdpLockKeys';
 import { installRdpStats } from '../../utils/rdpStats';
 import { RdpStatsPanel } from './RdpStatsPanel';
@@ -160,11 +161,15 @@ const SCANCODE_OPTIONS: { label: string; code: number; group: string }[] = [
   })),
 ];
 
-/** Remote desktop size that exactly fills the viewer area ("Auto" mode). */
-function autoSizeFromArea(width: number, height: number): { width: number; height: number } | null {
+/**
+ * Remote desktop size that exactly fills the viewer area ("Auto" mode). `ratio` = device pixels
+ * per CSS pixel (rdpDisplay.ts): on a high-DPI screen the desktop is requested in device pixels,
+ * so the canvas is shown 1:1 on the screen instead of being stretched (blurry).
+ */
+function autoSizeFromArea(width: number, height: number, ratio = 1): { width: number; height: number } | null {
   if (width <= 300 || height <= 200) return null; // hidden tab / not laid out yet
-  let w = Math.min(8192, Math.max(640, Math.round(width)));
-  let h = Math.min(8192, Math.max(480, Math.round(height)));
+  let w = Math.min(8192, Math.max(640, Math.round(width * ratio)));
+  let h = Math.min(8192, Math.max(480, Math.round(height * ratio)));
   w = w - (w % 4);
   h = h - (h % 4);
   return { width: w, height: h };
@@ -192,6 +197,113 @@ function getDimensionsForPreset(
   }
 
   return { width: 1920, height: 1080 };
+}
+
+/** Remote desktop size plus the device-pixel ratio it was computed for (1 = CSS pixels). */
+interface RemoteSize {
+  width: number;
+  height: number;
+  ratio: number;
+}
+
+/** Size to request for a resolution preset; only "Auto" follows the screen scaling (rdpDisplay.ts). */
+function remoteDesktopSize(
+  preset: string,
+  container: HTMLElement | null,
+  rdpSettings?: { width: number; height: number } | null
+): RemoteSize {
+  const fixed = RESOLUTION_PRESETS.some((p) => p.value === preset && p.width > 0);
+  if (!fixed && container) {
+    const rect = container.getBoundingClientRect();
+    const ratio = rdpPixelRatio();
+    const auto = autoSizeFromArea(rect.width, rect.height, ratio);
+    if (auto) return { ...auto, ratio };
+  }
+  // A fixed resolution, or the area is not laid out yet: the size as it is, not scaled
+  return { ...getDimensionsForPreset(preset, fixed ? container : null, rdpSettings), ratio: 1 };
+}
+
+/** Display Control resize with the matching desktop scale factor (also 100 % – resets a previous one). */
+function sendRemoteSize(ui: UserInteraction, size: RemoteSize) {
+  ui.resize(size.width, size.height, rdpScaleFactor(size.ratio));
+}
+
+/**
+ * How the canvas is shown (the component itself always stays in its "fit" mode – its own sizing
+ * would fight these rules):
+ * - "Fit": scaled to fill the area, up or down, keeping the aspect ratio, centred. When that is
+ *   (almost) one remote pixel per screen pixel – the Auto desktop, requested for the area in
+ *   device pixels – it is shown exactly 1:1: the requested size is a few pixels smaller than the
+ *   area (even sizes), and stretching by that fraction of a percent blurred text.
+ * - "100% (1:1)": one remote pixel per screen pixel (the component showed it at one remote pixel
+ *   per CSS pixel – 2× enlarged on a 200 % screen), from the top left, the wrapper scrolls.
+ * A 1:1 canvas starts at a whole device pixel (a layout at e.g. 150 % or a split pane can start
+ * between two) and is drawn without smoothing.
+ */
+function applyCanvasStyle(shadowRoot: ShadowRoot | null | undefined, area: DOMRect | undefined, mode: 'fit' | 'real') {
+  if (!shadowRoot) return;
+  const id = 'remoteflow-rdp-hidpi';
+  let styleEl = shadowRoot.getElementById(id) as HTMLStyleElement | null;
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = id;
+    shadowRoot.appendChild(styleEl);
+  }
+  // Written only when it changes: this function runs from a MutationObserver on the same tree
+  const setCss = (css: string) => {
+    if (styleEl!.textContent !== css) styleEl!.textContent = css;
+  };
+  const canvas = shadowRoot.querySelector('canvas#renderer') as HTMLCanvasElement | null;
+  if (!canvas || !area || canvas.width <= 0 || canvas.height <= 0 || area.width <= 0 || area.height <= 0) {
+    setCss('');
+    return;
+  }
+  const dpr = screenScale();
+  // Size in CSS pixels at one remote pixel per screen pixel
+  const w1 = canvas.width / dpr;
+  const h1 = canvas.height / dpr;
+  let scale = 1;
+  if (mode === 'fit') {
+    scale = Math.min(area.width / w1, area.height / h1);
+    if (scale >= 1 && scale < 1.02) scale = 1;
+  }
+  const w = w1 * scale;
+  const h = h1 * scale;
+  const align = mode === 'real' ? 'flex-start' : 'center';
+  // Selectors doubled: they must outrank the generic overrides (applyShadowRootScalingOverrides,
+  // e.g. ".screen-wrapper:not(.scale-real) canvas#renderer"), which are also !important
+  const css = (dx: number, dy: number) => `
+    :host, .svelte-1103xra.svelte-1103xra, .screen-wrapper.screen-wrapper.screen-wrapper, .screen-viewer.screen-viewer {
+      justify-content: ${align} !important;
+      align-items: ${align} !important;
+    }
+    .screen-wrapper.screen-wrapper.screen-wrapper {
+      overflow: ${mode === 'real' ? 'auto' : 'hidden'} !important;
+    }
+    .screen-viewer.screen-viewer {
+      width: auto !important;
+      height: auto !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      max-width: none !important;
+      max-height: none !important;
+      flex: none !important;
+    }
+    canvas#renderer#renderer {
+      width: ${w}px !important;
+      height: ${h}px !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      max-width: none !important;
+      max-height: none !important;
+      transform: translate(${dx}px, ${dy}px) !important;
+      image-rendering: ${scale === 1 ? 'pixelated' : 'auto'} !important;
+    }`;
+  setCss(css(0, 0));
+  if (scale !== 1) return;
+  const rect = canvas.getBoundingClientRect(); // layout without the shift
+  const snap = (v: number) => (Math.round(v * dpr) - v * dpr) / dpr;
+  setCss(css(snap(rect.left), snap(rect.top)));
 }
 
 // Inject CSS overrides into open ShadowRoot of <iron-remote-desktop> so canvas scales to fit without clipping or covering the Windows taskbar
@@ -284,7 +396,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
   const lastSyncedFilesKeyRef = useRef<string>('');
   const hasStagedUploadRef = useRef<boolean>(false);
   const stagedDroppedFilesRef = useRef<DroppedFile[]>([]);
-  const lastAppliedResRef = useRef<{ width: number; height: number } | null>(null);
+  const lastAppliedResRef = useRef<RemoteSize | null>(null);
   // Throttling of focus-triggered clipboard sync (each sync may reach the OS clipboard)
   const clipboardSyncInFlightRef = useRef<boolean>(false);
   // "Clipboard" in the connection's RDP settings: when off, nothing is exchanged with the remote
@@ -314,6 +426,13 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
   const [isLaunchingExternal, setIsLaunchingExternal] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [scaleMode, setScaleMode] = useState<'fit' | 'real'>('fit');
+  const scaleModeRef = useRef(scaleMode);
+  scaleModeRef.current = scaleMode;
+  const canvasObserverRef = useRef<MutationObserver | null>(null);
+  /** Re-applies the pixel-exact canvas size (high-DPI) after any change of sizes or mode. */
+  const refreshCanvasStyle = useCallback(() => {
+    applyCanvasStyle(elementRef.current?.shadowRoot, containerRef.current?.getBoundingClientRect(), scaleModeRef.current);
+  }, []);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
 
   // Key Sequence / Combination menu
@@ -826,21 +945,32 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
   // Dynamic resolution application (Display Control PDU)
   const applyResolution = useCallback((resPreset: string) => {
     setSelectedResolution(resPreset);
+    if (resPreset === 'auto') {
+      // No "Fit / 100%" switch in Auto (the desktop has the size of the area)
+      scaleModeRef.current = 'fit';
+      setScaleMode('fit');
+    }
     const ui = userInteractionRef.current;
     if (!ui) return;
 
-    const target = getDimensionsForPreset(resPreset, containerRef.current, session.rdpSettings);
-    lastAppliedResRef.current = { width: target.width, height: target.height };
+    const target = remoteDesktopSize(resPreset, containerRef.current, session.rdpSettings);
+    lastAppliedResRef.current = target;
     try {
-      ui.resize(target.width, target.height);
-      showToast(t('Rozdzielczość: {width} × {height}', { width: target.width, height: target.height }), 2000);
+      sendRemoteSize(ui, target);
+      refreshCanvasStyle();
+      showToast(
+        target.ratio > 1
+          ? t('Rozdzielczość: {width} × {height}, skalowanie {scale}%', { width: target.width, height: target.height, scale: rdpScaleFactor(target.ratio) })
+          : t('Rozdzielczość: {width} × {height}', { width: target.width, height: target.height }),
+        2000
+      );
       setTimeout(() => {
         window.dispatchEvent(new Event('resize'));
       }, 100);
     } catch (err) {
       console.warn('[RemoteFlow RDP] Błąd dynamicznej zmiany rozdzielczości:', err);
     }
-  }, [session.rdpSettings, showToast]);
+  }, [session.rdpSettings, showToast, refreshCanvasStyle]);
 
   // Initialize and mount the embedded IronRDP WebAssembly Canvas client
   useEffect(() => {
@@ -992,7 +1122,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
       // Create the custom Web Component element with our enhanced WASM Backend
       const el = document.createElement('iron-remote-desktop') as any;
       el.module = customModule;
-      el.scale = scaleMode;
+      el.scale = 'fit'; // both modes: applyCanvasStyle
       el.flexcenter = 'true';
       el.style.width = '100%';
       el.style.height = '100%';
@@ -1007,6 +1137,22 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
 
         // Apply ShadowRoot scaling fixes once on component ready (safe, idempotent)
         applyShadowRootScalingOverrides(el.shadowRoot);
+        // The canvas size follows the server (initial size, every resize): keep it pixel-exact
+        if (el.shadowRoot) {
+          canvasObserverRef.current?.disconnect();
+          // Our own <style> changes are ignored (no feedback loop)
+          canvasObserverRef.current = new MutationObserver((mutations) => {
+            if (mutations.some((m) => !(m.target instanceof HTMLStyleElement) && m.target.parentNode?.nodeName !== 'STYLE')) {
+              refreshCanvasStyle();
+            }
+          });
+          canvasObserverRef.current.observe(el.shadowRoot, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['width', 'height'],
+          });
+        }
 
         // Enable clipboard, disable IronRDP's buggy browser-polling loop in favor of our native GTK/Wayland sync
         try {
@@ -1075,11 +1221,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
           // Read from the vault only now – the password is not kept in the session data
           const rdpPassword = await api.getRdpSessionPassword(session.sessionId, session.connectionId);
           if (!isSubscribed) return;
-          const targetDimensions = getDimensionsForPreset(
-            selectedResolution,
-            containerRef.current,
-            session.rdpSettings
-          );
+          const targetDimensions = remoteDesktopSize(selectedResolution, containerRef.current, session.rdpSettings);
 
           const configBuilder = new ConfigBuilder()
             .withDestination(hostPort(session.host, session.port))
@@ -1088,7 +1230,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
             .withUsername(session.username || '')
             .withPassword(rdpPassword)
             .withServerDomain(session.rdpDomain || '')
-            .withDesktopSize(targetDimensions);
+            .withDesktopSize({ width: targetDimensions.width, height: targetDimensions.height });
 
           try {
             configBuilder.withExtension(enableCredssp(true));
@@ -1121,8 +1263,35 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
 
           ui.setVisibility(true);
           setStatus('connected');
-          lastAppliedResRef.current = { width: targetDimensions.width, height: targetDimensions.height };
-          setStatusMessage(t('Sesja RDP aktywna ({width} × {height})', { width: targetDimensions.width, height: targetDimensions.height }));
+          lastAppliedResRef.current = targetDimensions;
+          refreshCanvasStyle();
+          setStatusMessage(
+            targetDimensions.ratio > 1
+              ? t('Sesja RDP aktywna ({width} × {height}, skalowanie {scale}%)', {
+                  width: targetDimensions.width,
+                  height: targetDimensions.height,
+                  scale: rdpScaleFactor(targetDimensions.ratio),
+                })
+              : t('Sesja RDP aktywna ({width} × {height})', { width: targetDimensions.width, height: targetDimensions.height })
+          );
+          // The connection itself cannot carry the scale factor (the web client has no such
+          // option), so it follows over Display Control once the channel is up. Sent twice: a
+          // request made before the server opened the channel is dropped; the same layout again
+          // changes nothing.
+          if (targetDimensions.ratio > 1) {
+            for (const delay of [1000, 3000]) {
+              setTimeout(() => {
+                const current = lastAppliedResRef.current;
+                if (isSubscribed && userInteractionRef.current && current === targetDimensions) {
+                  try {
+                    sendRemoteSize(userInteractionRef.current, current);
+                  } catch (err) {
+                    console.warn('[RemoteFlow RDP] Scale factor not applied:', err);
+                  }
+                }
+              }, delay);
+            }
+          }
 
           setTimeout(() => {
             window.dispatchEvent(new Event('resize'));
@@ -1174,6 +1343,8 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
       }
       rdpWasmSessionRef.current = null;
       fileTransferProviderRef.current = null;
+      canvasObserverRef.current?.disconnect();
+      canvasObserverRef.current = null;
       if (localEl && localEl.parentNode) {
         localEl.parentNode.removeChild(localEl);
       }
@@ -1182,17 +1353,20 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
   }, [session.sessionId, session.rdpProxyPort, connectionAttempts]);
 
   // Adjust scale when toggled ('fit' vs 'real')
-  const handleToggleScale = () => {
-    const nextMode = scaleMode === 'fit' ? 'real' : 'fit';
+  const handleSetScale = (nextMode: 'fit' | 'real') => {
+    if (nextMode === scaleMode) return;
     setScaleMode(nextMode);
+    // Both modes are done by applyCanvasStyle; the component always stays in "fit"
     if (elementRef.current) {
-      (elementRef.current as any).scale = nextMode;
+      (elementRef.current as any).scale = 'fit';
     }
     if (userInteractionRef.current) {
-      userInteractionRef.current.setScale(nextMode === 'fit' ? 1 : 3);
+      userInteractionRef.current.setScale(1);
     }
+    scaleModeRef.current = nextMode;
     setTimeout(() => {
       window.dispatchEvent(new Event('resize'));
+      refreshCanvasStyle();
     }, 50);
   };
 
@@ -1202,33 +1376,57 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
     if (!container) return;
 
     let timeoutId: any = null;
+    const applyAutoSize = (width: number, height: number) => {
+      if (selectedResolution !== 'auto' || !userInteractionRef.current || status !== 'connected') return;
+      const ratio = rdpPixelRatio();
+      const size = autoSizeFromArea(width, height, ratio);
+      if (!size) return;
+      const last = lastAppliedResRef.current;
+      if (last?.width === size.width && last?.height === size.height && last.ratio === ratio) return;
+      const next: RemoteSize = { ...size, ratio };
+      lastAppliedResRef.current = next;
+      sendRemoteSize(userInteractionRef.current, next);
+      refreshCanvasStyle();
+    };
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
+        // At once: a canvas that no longer fits must go back to scale-to-fit until the server resizes
+        refreshCanvasStyle();
         if (width > 300 && height > 200) {
           clearTimeout(timeoutId);
-          timeoutId = setTimeout(() => {
-            if (selectedResolution === 'auto' && userInteractionRef.current && status === 'connected') {
-              const size = autoSizeFromArea(width, height);
-              if (!size) return;
-              const { width: w, height: h } = size;
-              if (lastAppliedResRef.current?.width === w && lastAppliedResRef.current?.height === h) {
-                return;
-              }
-              lastAppliedResRef.current = { width: w, height: h };
-              userInteractionRef.current.resize(w, h);
-            }
-          }, 200);
+          timeoutId = setTimeout(() => applyAutoSize(width, height), 200);
         }
       }
     });
-
     observer.observe(container);
+
+    // The screen scaling changed (window moved to another monitor, Windows setting changed):
+    // same size in CSS pixels, different size in device pixels.
+    const reapply = () => {
+      refreshCanvasStyle();
+      const rect = container.getBoundingClientRect();
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => applyAutoSize(rect.width, rect.height), 200);
+    };
+    let scaleQuery: MediaQueryList | null = null;
+    const onScaleChange = () => {
+      watchScale();
+      reapply();
+    };
+    const watchScale = () => {
+      scaleQuery?.removeEventListener('change', onScaleChange);
+      scaleQuery = window.matchMedia(`(resolution: ${screenScale()}dppx)`);
+      scaleQuery.addEventListener('change', onScaleChange);
+    };
+    watchScale();
+
     return () => {
       observer.disconnect();
       clearTimeout(timeoutId);
+      scaleQuery?.removeEventListener('change', onScaleChange);
     };
-  }, [selectedResolution, status]);
+  }, [selectedResolution, status, refreshCanvasStyle]);
 
   // Synchronize clipboard when window regains focus or tab is activated
   useEffect(() => {
@@ -1453,11 +1651,10 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
     if (userInteractionRef.current) {
       userInteractionRef.current.setVisibility(isActive);
       if (isActive) {
-        if (scaleMode === 'fit') {
-          userInteractionRef.current.setScale(1);
-        }
+        userInteractionRef.current.setScale(1); // both modes: applyCanvasStyle
         setTimeout(() => {
           window.dispatchEvent(new Event('resize'));
+          refreshCanvasStyle();
           focusRdpCanvas();
         }, 50);
         setTimeout(() => {
@@ -1465,7 +1662,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
         }, 150);
       }
     }
-  }, [isActive, scaleMode, focusRdpCanvas]);
+  }, [isActive, scaleMode, focusRdpCanvas, refreshCanvasStyle]);
 
   // Send F5 refresh key (scancode 0x003F) directly to remote Windows session
   const sendF5ToRemote = useCallback(() => {
@@ -1733,19 +1930,32 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
             <Activity className="h-3 w-3 text-cyan-400" />
           </button>
 
-          {/* Scale Switcher: Fit vs Real (100% 1:1) */}
-          <button
-            onClick={handleToggleScale}
-            title={t('Zmień skalowanie pulpitu (obecnie: {mode})', { mode: scaleMode === 'fit' ? t('Dopasuj do okna') : t('100% oryginał (1:1)') })}
-            className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors ${
-              scaleMode === 'fit'
-                ? 'border-cyan-500/50 bg-cyan-950/40 text-cyan-200 hover:bg-cyan-900/50'
-                : 'border-slate-700 bg-slate-800/80 text-slate-200 hover:bg-slate-700'
-            }`}
-          >
-            <ZoomIn className="h-3 w-3 text-amber-400" />
-            <span className="text-[11px]">{scaleMode === 'fit' ? t('Dopasuj') : '100%'}</span>
-          </button>
+          {/* Scale Switcher: Fit vs Real (100% 1:1) – only for a fixed resolution: in Auto the
+              desktop always has the size of the area, so both would look the same */}
+          {selectedResolution !== 'auto' && (
+            <div className="flex items-center rounded-lg border border-slate-700 bg-slate-800/60 p-0.5" role="group">
+              <ZoomIn className="mx-1 h-3 w-3 text-amber-400" />
+              {(
+                [
+                  ['fit', t('Dopasuj'), t('Dopasuj do okna')],
+                  ['real', '100%', t('100% oryginał (1:1)')],
+                ] as const
+              ).map(([mode, label, title]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => handleSetScale(mode)}
+                  title={title}
+                  aria-pressed={scaleMode === mode}
+                  className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${
+                    scaleMode === mode ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Toggle Unified Files & Clipboard Drawer */}
           <button

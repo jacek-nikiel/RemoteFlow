@@ -45,7 +45,7 @@ The application uses **Tauri 2 and Rust** for the native backend, **React 19 and
 - "Directory from the terminal" button: the server pane jumps to the directory you are in in the SSH terminal (also in a nested shell or while a program runs; nothing is typed into the terminal). Linux servers (`/proc`); other systems use the directory reported by the shell (OSC 7), if any.
 
 ### RDP
-- Embedded RDP client (IronRDP compiled to WebAssembly) through a local proxy – the resolution automatically follows the window size.
+- Embedded RDP client (IronRDP compiled to WebAssembly) through a local proxy – the resolution automatically follows the window size, sharp also with display scaling (4K, 150–200%: full resolution plus the scaling factor for the server, as in the Microsoft client).
 - TLS with certificate pinning; automatic fallback to the system TLS stack (Schannel / OpenSSL) for older servers such as Windows Server 2012.
 - Domain accounts: `user` + domain field, `DOMAIN\user`, UPN `user@domain.local` or `.\account` for a local account – normalised the same way for the embedded client, FreeRDP and mstsc.
 - Text clipboard in both directions. On Windows, files copied in the remote session can be pasted directly in Explorer (and vice versa); on Linux files are exchanged through a shared folder. The clipboard can be switched off per connection (applies to the embedded client, FreeRDP and mstsc). Local drives and the home folder are never shared with the server – FreeRDP shares only the dedicated `~/RemoteFlow_Shared` exchange folder.
