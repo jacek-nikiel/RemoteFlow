@@ -9,11 +9,12 @@ The version is kept in three files that must match (checked by the `version_test
 Each release has a section for the same version (`## X.Y.Z – …`) in this file and in `CHANGELOG.pl.md`; both go into the
 release notes, and the in-app update notice shows the one in the interface language.
 
-## Unreleased
+## 1.16.0 – Arch Linux package, settings save fix, F3 closes the viewer
 - **Fix: settings could not be saved with the default terminal history buffer.** The field accepted only values like 9,100 or 10,100 (steps of 1,000 counted from the minimum 100), so the default 10,000 blocked the Save button with "enter a valid value". It now goes in steps of 100.
 - **SFTP: F3 again closes the viewer** (as in Total Commander's lister) – for a file opened read-only (F3, the eye icon). While editing, F3 does nothing; Esc still closes in both cases.
 - **Arch Linux package** (`remoteflow-X.Y.Z-1-x86_64.pkg.tar.zst`) in releases, installed with `sudo pacman -U`. It is built by the release workflow from the same program as the other Linux packages (`scripts/build-arch-pkg.sh`, also in the Docker build), in a step without access to the signing key. The program recognises a pacman installation (also an AUR package) and does not update itself – the update notice links to the releases page instead of trying a .deb/.rpm install. Suggested by [9M2PJU](https://github.com/9M2PJU).
 - Three remaining hard-coded PL/EN texts (copy name, export scope error, cancelled connection) now go through the translations – thanks to [9M2PJU](https://github.com/9M2PJU).
+- **Update notes in your language:** the release notes contain an English and a Polish part, and the update notice shows the one matching the interface language (English as fallback). Versions up to 1.15.1 still show both parts when updating to this version.
 - Release workflow: GitHub actions updated to versions running on Node.js 24 (checkout v5, setup-node v5, github-script v8).
 
 ## 1.15.1 – SFTP: F3 view, F4 edit; Ctrl+Z fix in the editor

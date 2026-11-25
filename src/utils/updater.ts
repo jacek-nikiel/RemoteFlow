@@ -152,7 +152,7 @@ export async function openReleasesPage(): Promise<void> {
 }
 
 /**
- * Release notes in one language. From the release after 1.15.1 the notes hold an English and a Polish part, each
+ * Release notes in one language. From 1.16.0 the notes hold an English and a Polish part, each
  * after a `<!-- lang:xx -->` marker (scripts/release-notes.mjs); the part in `lang` is returned,
  * else the English one. Notes without markers (older releases) are returned whole.
  */

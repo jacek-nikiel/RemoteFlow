@@ -9,11 +9,12 @@ Wersja jest zapisana w trzech plikach, które muszą być zgodne (pilnuje tego t
 Każde wydanie ma sekcję dla tej samej wersji (`## X.Y.Z – …`) w tym pliku i w angielskim `CHANGELOG.md`; obie trafiają do opisu
 wydania, a okienko aktualizacji w programie pokazuje tę w języku interfejsu.
 
-## Niewydane (trafi do kolejnej wersji)
+## 1.16.0 – paczka Arch Linux, poprawka zapisu ustawień, F3 zamyka podgląd
 - **Poprawka: nie dało się zapisać ustawień z domyślnym buforem historii terminala.** Pole przyjmowało tylko wartości typu 9100 lub 10 100 (krok 1000 liczony od minimum 100), więc domyślne 10 000 blokowało przycisk Zapisz komunikatem „wprowadź prawidłową wartość”. Teraz krok wynosi 100.
 - **SFTP: ponowne F3 zamyka podgląd** (jak w listerze Total Commandera) – dla pliku otwartego tylko do odczytu (F3, ikona oka). Podczas edycji F3 nic nie robi; Esc nadal zamyka w obu przypadkach.
 - **Paczka Arch Linux** (`remoteflow-X.Y.Z-1-x86_64.pkg.tar.zst`) w wydaniach, instalowana poleceniem `sudo pacman -U`. Buduje ją workflow wydań z tego samego programu co pozostałe paczki Linux (`scripts/build-arch-pkg.sh`, także w budowaniu przez Dockera), w kroku bez dostępu do klucza podpisującego. Program rozpoznaje instalację z pacmana (także paczkę z AUR) i nie aktualizuje się sam – okienko aktualizacji otwiera stronę wydań zamiast próbować instalacji .deb/.rpm. Pomysł: [9M2PJU](https://github.com/9M2PJU).
 - Trzy pozostałe teksty PL/EN zapisane na sztywno (nazwa kopii, błąd zakresu eksportu, anulowane połączenie) idą teraz przez tłumaczenia – dzięki [9M2PJU](https://github.com/9M2PJU).
+- **Opis aktualizacji w Twoim języku:** opis wydania zawiera część angielską i polską, a okienko aktualizacji pokazuje tę w języku interfejsu (gdy jej brak – angielską). Wersje do 1.15.1 przy aktualizacji do tej wersji pokażą jeszcze obie części.
 - Workflow wydań: akcje GitHub zaktualizowane do wersji działających na Node.js 24 (checkout v5, setup-node v5, github-script v8).
 
 ## 1.15.1 – SFTP: F3 podgląd, F4 edycja; poprawka Ctrl+Z w edytorze
