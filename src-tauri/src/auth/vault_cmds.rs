@@ -27,6 +27,11 @@ pub fn vault_reveal_password(connection_id: &str, state: tauri::State<'_, AuthSt
 pub(crate) fn vault_reveal_password_impl(connection_id: &str, state: &AuthState) -> Result<String, String> {
     let mgr = lock_auth(&state)?;
     let key = mgr.unlocked_key()?;
+    if crate::session::adhoc::is_adhoc(connection_id) {
+        return crate::session::adhoc::get(connection_id)
+            .and_then(|(_, password)| password)
+            .ok_or_else(|| tr!("Brak zapisanego hasła", "No saved password").to_string());
+    }
     let vault = load_vault_verified(key)?;
     let conn = vault
         .connections
@@ -66,6 +71,9 @@ pub(crate) fn vault_set_connection_password_impl(connection_id: &str, password: 
     }
     let mgr = lock_auth(state)?;
     let key = mgr.unlocked_key()?;
+    if crate::session::adhoc::is_adhoc(connection_id) {
+        return crate::session::adhoc::set_password(connection_id, &password);
+    }
     let encrypted = encrypt_string(key, &password)?;
     update_vault(key, |v| {
         let conn = v.connections.iter_mut().find(|c| c.id == connection_id)

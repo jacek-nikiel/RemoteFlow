@@ -15,7 +15,7 @@ export interface RdpCertificateInfo {
   fingerprint: string;
   previousFingerprint: string | null;
 }
-import { BackupEntry, BackupSettings, UiSettings, TransferSummary, SftpFileEntry, Connection, Credential, Group, ImportSummary, KnownHostEntry, SessionInfo, SftpListResponse, VaultData, VaultStatus } from '../types';
+import { BackupEntry, BackupSettings, SavedWorkspace, UiSettings, TransferSummary, SftpFileEntry, Connection, Credential, Group, ImportSummary, KnownHostEntry, SessionInfo, SftpListResponse, VaultData, VaultStatus } from '../types';
 
 export const isTauri = () => {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -670,6 +670,16 @@ export const api = {
     }
   },
 
+  /** Tabs saved for "Restore previous sessions" (null when off or nothing saved). */
+  async getSavedWorkspace(): Promise<SavedWorkspace | null> {
+    if (isTauri()) return await invoke<SavedWorkspace | null>('vault_get_saved_workspace');
+    return null;
+  },
+
+  async setSavedWorkspace(workspace: SavedWorkspace | null): Promise<void> {
+    if (isTauri()) await invoke<void>('vault_set_saved_workspace', { workspace });
+  },
+
   async getBackupSettings(): Promise<BackupSettings> {
     if (isTauri()) {
       return await invoke<BackupSettings>('vault_get_backup_settings');
@@ -816,6 +826,38 @@ export const api = {
   /** New empty local file; returns its path. */
   async localMkfile(parent: string, name: string): Promise<string> {
     return await invoke<string>('local_mkfile', { parent, name });
+  },
+
+  /** Quick Connect: a connection kept only in memory (not saved in the vault). */
+  async adhocConnectionCreate(protocol: 'ssh' | 'rdp', host: string, port: number, username: string, sshAuthType: 'password' | 'agent', password: string): Promise<Connection> {
+    return await invoke<Connection>('adhoc_connection_create', { protocol, host, port, username, sshAuthType, password: password || null });
+  },
+
+  async adhocConnectionForget(connectionId: string): Promise<void> {
+    if (isTauri()) await invoke<void>('adhoc_connection_forget', { connectionId });
+  },
+
+  /** Renames a file / folder on the server; returns the new path (never overwrites). */
+  async sftpRename(connectionId: string, path: string, newName: string): Promise<string> {
+    return await invoke<string>('sftp_rename', { connectionId, path, newName });
+  },
+
+  /** Moves files / folders into another server folder; returns how many were moved. */
+  async sftpMove(connectionId: string, paths: string[], targetDir: string): Promise<number> {
+    return await invoke<number>('sftp_move', { connectionId, paths, targetDir });
+  },
+
+  /** chmod on the server; `scope` limits which contents of folders change when recursive. */
+  async sftpChmod(connectionId: string, paths: string[], mode: number, recursive: boolean, scope: 'all' | 'files' | 'dirs'): Promise<number> {
+    return await invoke<number>('sftp_chmod', { connectionId, paths, mode, recursive, scope });
+  },
+
+  async localRename(path: string, newName: string): Promise<string> {
+    return await invoke<string>('local_rename', { path, newName });
+  },
+
+  async localMove(paths: string[], targetDir: string): Promise<number> {
+    return await invoke<number>('local_move', { paths, targetDir });
   },
 
   async localMkdir(parent: string, name: string): Promise<string> {

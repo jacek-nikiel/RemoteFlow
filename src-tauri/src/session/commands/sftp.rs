@@ -415,3 +415,90 @@ pub async fn local_list_dir(local_path: String, auth_state: tauri::State<'_, Aut
     .await
     .map_err(|e| e.to_string())?
 }
+
+// --- Rename / move / permissions (see fileops.rs) ----------------------------------------------
+
+/// Renames a file or folder on the server; returns the new path.
+#[tauri::command]
+pub async fn sftp_rename(
+    connection_id: String,
+    path: String,
+    new_name: String,
+    auth_state: tauri::State<'_, AuthState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
+    tokio::task::spawn_blocking(move || {
+        transfer::with_pooled_sftp(&connection_id, &config, |sftp| fileops::remote_rename(sftp, &path, &new_name))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Moves files / folders into another folder on the server; returns how many were moved.
+#[tauri::command]
+pub async fn sftp_move(
+    connection_id: String,
+    paths: Vec<String>,
+    target_dir: String,
+    auth_state: tauri::State<'_, AuthState>,
+    app: tauri::AppHandle,
+) -> Result<u32, String> {
+    let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
+    tokio::task::spawn_blocking(move || {
+        transfer::with_pooled_sftp(&connection_id, &config, |sftp| fileops::remote_move(sftp, &paths, &target_dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Changes permissions on the server (`scope`: "all" | "files" | "dirs" for the contents of
+/// folders when `recursive`); returns how many entries were changed.
+#[tauri::command]
+pub async fn sftp_chmod(
+    connection_id: String,
+    paths: Vec<String>,
+    mode: u32,
+    recursive: bool,
+    scope: String,
+    auth_state: tauri::State<'_, AuthState>,
+    app: tauri::AppHandle,
+) -> Result<u32, String> {
+    if mode > 0o7777 {
+        return Err(tr!("Nieprawidłowe uprawnienia", "Invalid permissions").to_string());
+    }
+    let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
+    let scope = fileops::ChmodScope::parse(&scope);
+    tokio::task::spawn_blocking(move || {
+        transfer::with_pooled_sftp(&connection_id, &config, |sftp| fileops::remote_chmod(sftp, &paths, mode, recursive, scope))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Renames a local file or folder; returns the new path.
+#[tauri::command]
+pub async fn local_rename(path: String, new_name: String, auth_state: tauri::State<'_, AuthState>) -> Result<String, String> {
+    let access = localfs::local_access(&auth_state)?;
+    let target = fileops::local_rename_target(&path, &new_name)?;
+    // The old name disappears like a delete; the new one must not land among protected files
+    access.check_delete(&path)?;
+    access.check(&target)?;
+    tokio::task::spawn_blocking(move || fileops::local_rename(&path, &target))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Moves local files / folders into another folder; returns how many were moved.
+#[tauri::command]
+pub async fn local_move(paths: Vec<String>, target_dir: String, auth_state: tauri::State<'_, AuthState>) -> Result<u32, String> {
+    let access = localfs::local_access(&auth_state)?;
+    let moves = fileops::local_move_targets(&paths, &target_dir)?;
+    for (from, to) in &moves {
+        access.check_delete(from)?;
+        access.check(to)?;
+    }
+    tokio::task::spawn_blocking(move || fileops::local_move(&moves))
+        .await
+        .map_err(|e| e.to_string())?
+}

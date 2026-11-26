@@ -9,7 +9,13 @@ The version is kept in three files that must match (checked by the `version_test
 Each release has a section for the same version (`## X.Y.Z – …`) in this file and in `CHANGELOG.pl.md`; both go into the
 release notes, and the in-app update notice shows the one in the interface language.
 
-## Unreleased
+## 1.18.0 – command palette and Quick Connect, SFTP rename/move/permissions, restore previous sessions
+
+### Added
+- **Command palette (Ctrl+K, in a session Ctrl+Shift+K)** – also the **Search** button in the header. Fuzzy search over saved connections by name, host, user, tags and folder (e.g. "prod db", "wp1"); Enter connects or switches to the open tab, Shift+Enter opens another tab. Only connections are listed, so the list stays short.
+- **Quick Connect:** type `ssh root@10.0.0.15:2222`, `ssh -p 2222 deploy@web1`, `rdp admin@srv01` or `user@host` in the palette and connect without saving the connection. Password or SSH agent; the password is kept only in memory until the tab is closed or the vault is locked with the Master Password. Host keys and RDP certificates are checked as usual. The tab menu has **Save the connection in the vault…** (opens the connection form pre-filled).
+- **SFTP: rename (F2)** in place in both panes, **Move to…** (folder dialog, or drag items onto a folder in the same pane) and **Permissions…** on the server (rwx checkboxes, octal value, SUID/SGID/sticky, optionally recursive for files and folders, files only or folders only; symbolic links are skipped). Nothing is ever overwritten. The row tooltip on the server shows the permissions.
+- **Restore previous sessions** (Settings → Confirmations, off by default): after unlocking, the tabs, the layout and the panes of the last run are opened again. The list is kept in the encrypted vault and updated while you work, so it also survives a crash or a shutdown; quick connections are not kept.
 
 ### Fixed
 - **Folders:** a folder can no longer be placed inside its own subfolder (this used to hang the sidebar). Existing cycles are repaired when the vault opens. Deleting a folder moves its subfolders one level up instead of hiding them.
@@ -18,6 +24,7 @@ release notes, and the in-app update notice shows the one in the interface langu
 - **PIN:** 4–12 digits everywhere; the dots follow the typed digits; an empty PIN is refused with a message.
 - **Lock with FreeRDP:** embedded FreeRDP windows are hidden as soon as the vault locks (also on Windows lock / sleep), so nothing shows over the lock screen.
 - **RDP folder browser:** "up" and "Send this folder" work on Windows paths too.
+- **Tabs opened quickly one after another** (e.g. restored) could land in the wrong pane of a split layout.
 
 ### Changed
 - **Dropping files works on Windows:** drag files or folders onto the SSH terminal or the RDP picture (native drops). In the terminal they go to the shell's current folder with the same transfer as the SFTP window (progress on the Files button, Stop in the window). Ctrl+V of copied files in the terminal does the same.

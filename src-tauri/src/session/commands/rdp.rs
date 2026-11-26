@@ -77,9 +77,12 @@ pub async fn rdp_certificate_trust(connection_id: String, host: String, port: u1
     let mgr = lock_auth(&auth_state)?;
     let key = mgr.unlocked_key()?;
     crate::vault::storage::update_vault(key, |v| {
-        let conn = v.connections.iter().find(|c| c.id == connection_id && c.protocol == "rdp" && c.host == host && c.port == port)
-            .ok_or_else(|| tr!("Połączenie RDP zmieniło się – sprawdź certyfikat ponownie", "The RDP connection changed – check the certificate again").to_string())?;
-        let id = known_hosts::host_id("rdp", &conn.host, conn.port);
+        // A quick connection is not in the vault; its address was checked by the preview above
+        if !crate::session::adhoc::is_adhoc(&connection_id) {
+            v.connections.iter().find(|c| c.id == connection_id && c.protocol == "rdp" && c.host == host && c.port == port)
+                .ok_or_else(|| tr!("Połączenie RDP zmieniło się – sprawdź certyfikat ponownie", "The RDP connection changed – check the certificate again").to_string())?;
+        }
+        let id = known_hosts::host_id("rdp", &host, port);
         if v.metadata.known_hosts.get(&id) != previous_fingerprint.as_ref() { return Err(tr!("Zaufany certyfikat zmienił się w międzyczasie – sprawdź go ponownie", "The trusted certificate changed in the meantime – check it again").into()); }
         v.metadata.known_hosts.insert(id, fingerprint);
         Ok(())

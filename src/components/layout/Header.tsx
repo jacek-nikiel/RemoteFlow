@@ -7,6 +7,7 @@ import {
   KeyRound,
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
 } from 'lucide-react';
 import { APP_VERSION } from '../../version';
 import { VaultStatus } from '../../types';
@@ -23,6 +24,8 @@ interface Props {
   onLock: () => void;
   onOpenSettings: () => void;
   onOpenImportExport: () => void;
+  /** Command palette (Ctrl+K). */
+  onOpenPalette?: () => void;
 }
 
 export const Header: React.FC<Props> = ({
@@ -34,6 +37,7 @@ export const Header: React.FC<Props> = ({
   onLock,
   onOpenSettings,
   onOpenImportExport,
+  onOpenPalette,
 }) => {
   const t = useT();
   return (
@@ -94,6 +98,17 @@ export const Header: React.FC<Props> = ({
 
       {/* Right Controls */}
       <div className="flex items-center gap-1.5">
+        {onOpenPalette && (
+          <button
+            onClick={onOpenPalette}
+            title={t('Szukaj połączeń, szybkie połączenie (Ctrl+K, w sesji Ctrl+Shift+K)')}
+            className="flex items-center gap-1.5 rounded-md border border-slate-800 bg-slate-800/60 px-2 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
+          >
+            <Search className="h-3 w-3 text-cyan-400" />
+            <span className="hidden md:inline">{t('Szukaj')}</span>
+            <kbd className="rounded border border-slate-700 px-1 font-mono text-[9px] text-slate-500">Ctrl+K</kbd>
+          </button>
+        )}
         <button
           onClick={onOpenCredentials}
           title={t('Zarządzaj poświadczeniami (współdzielone loginy, hasła, klucze)')}

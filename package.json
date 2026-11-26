@@ -1,7 +1,7 @@
 {
   "name": "remoteflow",
   "private": true,
-  "version": "1.17.0",
+  "version": "1.18.0",
   "description": "Cross-platform SSH, SFTP and RDP connection manager with an encrypted vault (Tauri 2 + Rust + React)",
   "license": "MIT",
   "author": "Jacek Nikiel",

@@ -168,6 +168,49 @@ pub struct VaultMetadata {
     /// Interface confirmations (closing sessions, exiting the application).
     #[serde(default, skip_serializing_if = "UiSettings::is_default")]
     pub ui: UiSettings,
+    /// Open tabs and the layout, kept for "Restore previous sessions" (only while it is on).
+    #[serde(rename = "savedWorkspace", default, skip_serializing_if = "Option::is_none")]
+    pub saved_workspace: Option<SavedWorkspace>,
+}
+
+/// Tabs open when the application was closed (only connections saved in the vault).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedWorkspace {
+    /// Connection ids in tab order.
+    pub tabs: Vec<String>,
+    /// "single" | "split-horizontal" | "split-vertical" | "grid-4" | "columns-3"
+    pub layout: String,
+    /// Tab shown in each pane (index into `tabs`, -1 = empty pane).
+    #[serde(default)]
+    pub panes: Vec<i32>,
+    /// Index of the active tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<u32>,
+}
+
+pub const MAX_SAVED_TABS: usize = 200;
+
+impl SavedWorkspace {
+    /// Drops what cannot be valid (too many tabs, indexes outside the list, unknown layouts).
+    pub fn sanitized(mut self) -> Self {
+        self.tabs.truncate(MAX_SAVED_TABS);
+        self.tabs.retain(|id| !id.is_empty() && id.len() <= 200);
+        const LAYOUTS: [&str; 5] = ["single", "split-horizontal", "split-vertical", "grid-4", "columns-3"];
+        if !LAYOUTS.contains(&self.layout.as_str()) {
+            self.layout = "single".into();
+        }
+        let n = self.tabs.len() as i32;
+        self.panes.truncate(4);
+        for p in self.panes.iter_mut() {
+            if *p < 0 || *p >= n {
+                *p = -1;
+            }
+        }
+        if self.active.is_some_and(|a| a as i32 >= n) {
+            self.active = None;
+        }
+        self
+    }
 }
 
 fn default_true() -> bool {
@@ -186,6 +229,9 @@ pub struct UiSettings {
     /// existing vaults keep the same serialized form.
     #[serde(rename = "terminalScrollback", default = "default_scrollback", skip_serializing_if = "is_default_scrollback")]
     pub terminal_scrollback: u32,
+    /// Open the tabs from the last run after unlocking (off by default).
+    #[serde(rename = "restoreSessions", default, skip_serializing_if = "std::ops::Not::not")]
+    pub restore_sessions: bool,
 }
 
 pub const DEFAULT_TERMINAL_SCROLLBACK: u32 = 10_000;
@@ -206,6 +252,7 @@ impl Default for UiSettings {
             confirm_close_sessions: true,
             confirm_app_exit: true,
             terminal_scrollback: DEFAULT_TERMINAL_SCROLLBACK,
+            restore_sessions: false,
         }
     }
 }
@@ -442,5 +489,32 @@ pub mod group_tree {
             assert_eq!(cyclic[3].parent_id, None);
             assert!(!break_cycles(&mut cyclic));
         }
+    }
+}
+
+#[cfg(test)]
+mod saved_workspace_tests {
+    use super::*;
+
+    #[test]
+    fn sanitized_drops_invalid_parts() {
+        let ws = SavedWorkspace {
+            tabs: vec!["a".into(), "".into(), "b".into()],
+            layout: "weird".into(),
+            panes: vec![1, 5, -3, 0, 0, 1],
+            active: Some(7),
+        }
+        .sanitized();
+        assert_eq!(ws.tabs, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(ws.layout, "single");
+        assert_eq!(ws.panes, vec![1, -1, -1, 0]);
+        assert_eq!(ws.active, None);
+    }
+
+    #[test]
+    fn defaults_are_not_serialized() {
+        // Vaults written by older versions must keep the same serialized form (integrity MAC)
+        let ui = serde_json::to_string(&UiSettings::default()).unwrap();
+        assert!(!ui.contains("restoreSessions"));
     }
 }

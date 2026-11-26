@@ -18,6 +18,8 @@ Aplikacja wykorzystuje **Tauri 2 i Rust** jako natywny backend, **React 19 i Typ
 - Interfejs po polsku i angielsku – zmiana języka w nagłówku, na ekranie logowania lub w Ustawieniach (działa od razu).
 - Ciemny lub jasny motyw (Ustawienia), opcjonalnie z ciemnym terminalem w jasnym motywie.
 - Drzewo połączeń z zagnieżdżonymi grupami, kolorami, wyszukiwaniem (nazwa, host, IP, tagi) i przeciąganiem. Stan rozwinięcia grup i sortowanie A–Z w wybranych grupach są zapamiętywane po restarcie.
+- **Paleta poleceń** (Ctrl+K, w sesji Ctrl+Shift+K): rozmyte wyszukiwanie połączeń (nazwa, host, użytkownik, tagi, folder); Enter łączy. **Szybkie połączenie** – wpisz `ssh root@10.0.0.15:2222` albo `rdp admin@srv01`, aby połączyć się bez zapisywania (hasło zostaje tylko w pamięci); z menu karty można je potem zapisać w sejfie.
+- Opcjonalne **przywracanie poprzednich sesji** po odblokowaniu (karty, układ i panele; domyślnie wyłączone).
 - Menu kontekstowe grup: połączenie z hostami w grupie, dodawanie hostów i podgrup, sortowanie, edycja, usuwanie oraz rozwijanie i zwijanie wszystkich grup.
 - Klonowanie zapisanej konfiguracji połączenia (po potwierdzeniu) lub otwieranie kolejnej sesji tego samego połączenia.
 - Zakładki i podział ekranu: pojedynczy, poziomy, pionowy, 3 kolumny i siatka 2×2. Zmiana kolejności zakładek przeciąganiem lub z menu zakładki (na początek/koniec, w lewo/w prawo) bez przerywania połączenia; przeciąganie zakładek między panelami i wybór sesji dla każdego panelu.
@@ -38,7 +40,8 @@ Aplikacja wykorzystuje **Tauri 2 i Rust** jako natywny backend, **React 19 i Typ
 ### SFTP – dwupanelowy menedżer plików
 - Pliki lokalne po lewej, pliki serwera po prawej (jak w WinSCP / FileZilla); okno zajmuje połowę panelu, a przy podzielonym ekranie cały panel.
 - Zaznaczanie wielu elementów (klik, Ctrl, Shift, Ctrl+A) i wysyłanie / pobieranie plików oraz całych katalogów jednym kliknięciem.
-- Klawiatura: Ctrl+R odświeża używany panel (oba, gdy fokus jest w innym miejscu okna), Backspace – katalog nadrzędny, Enter – otwarcie katalogu, Delete – usunięcie (na serwerze trwale, na tym komputerze do kosza), Esc – zamknięcie okna.
+- Klawiatura: Ctrl+R odświeża używany panel (oba, gdy fokus jest w innym miejscu okna), Backspace – katalog nadrzędny, Enter – otwarcie katalogu, **F2 – zmiana nazwy**, Delete – usunięcie (na serwerze trwale, na tym komputerze do kosza), Esc – zamknięcie okna.
+- **Przenoszenie** plików i katalogów do innego katalogu (okno albo przeciągnięcie na katalog w tym samym panelu) oraz zmiana **uprawnień (chmod)** na serwerze – pola wyboru albo zapis ósemkowy, opcjonalnie rekurencyjnie (wszystko / tylko pliki / tylko katalogi). Istniejące pliki nigdy nie są nadpisywane.
 - Przeciąganie między panelami, na katalogi oraz z systemowego menedżera plików.
 - Filtrowanie i wyszukiwanie w podkatalogach po obu stronach, tworzenie i usuwanie katalogów i plików po obu stronach (nowy pusty plik otwiera się od razu w edytorze). Pliki lokalne trafiają do Kosza (Windows) / kosza pulpitu (Linux); gdy kosz jest niedostępny (np. dysk sieciowy), program pyta o trwałe usunięcie.
 - Postęp transferów (pliki i ilość przesłanych danych) z przyciskiem **Przerwij**. Pliki są zapisywane do pliku tymczasowego obok docelowego (`.nazwa.rf-part`) i zastępują istniejący plik dopiero po przesłaniu w całości – w obie strony – więc przerwany lub nieudany transfer nigdy nie zostawia uciętego pliku, a istniejący plik zachowuje poprzednią zawartość (i uprawnienia na serwerze). Pytanie o nadpisanie i menu kontekstowe. Usuwanie z serwera pokazuje aktualną ścieżkę i licznik zaznaczonych pozycji, a następnie wynik lub błąd; katalogi są usuwane wraz z zawartością.

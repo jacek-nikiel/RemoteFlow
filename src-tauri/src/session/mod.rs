@@ -7,6 +7,8 @@ pub mod ssh;
 pub mod ssh_algos;
 pub mod ssh_keyauth;
 pub mod transfer;
+pub mod fileops;
+pub mod adhoc;
 pub mod preview;
 pub mod localfs;
 pub mod tunnels;
@@ -256,6 +258,18 @@ fn resolve_connection(auth_state: &AuthState, connection_id: &str) -> Result<Res
         .unlocked_key()
         .map_err(|_| tr!("Magazyn poświadczeń jest zablokowany", "The credential store is locked").to_string())?;
     let vault = load_vault_verified(key)?;
+    if adhoc::is_adhoc(connection_id) {
+        let (conn, password) = adhoc::get(connection_id)
+            .ok_or_else(|| tr!("Szybkie połączenie wygasło – połącz się ponownie z palety (Ctrl+K)", "The quick connection has expired – connect again from the palette (Ctrl+K)").to_string())?;
+        return Ok(ResolvedConnection {
+            rdp_fingerprint: vault.metadata.known_hosts.get(&known_hosts::host_id("rdp", &conn.host, conn.port)).cloned(),
+            username: conn.username.clone(),
+            password,
+            private_key: None,
+            passphrase: None,
+            conn,
+        });
+    }
     resolve_connection_data(&vault, key, connection_id)
 }
 

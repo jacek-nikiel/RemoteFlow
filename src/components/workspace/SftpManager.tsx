@@ -1,85 +1,32 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDownUp,
   ArrowLeft,
   ArrowRight,
-  ArrowUp,
-  CheckSquare,
   ClipboardPaste,
-  Copy,
-  File,
-  FileArchive,
-  FileCode,
-  FileImage,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  FolderUp,
   HardDrive,
-  Link2,
-  Home,
   Loader2,
-  MinusSquare,
   Pin,
   PinOff,
-  SquareTerminal,
-  RefreshCw,
-  Search,
   Server,
-  Square,
-  Trash2,
   X,
   CircleStop,
-  Eye,
-  FilePlus,
-  Pencil,
-} from 'lucide-react';
+  } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getOscCwd } from '../../utils/terminalCwd';
 import { api, isTauri } from '../../services/api';
-import { SftpFileEntry, TransferProgress, TransferSummary } from '../../types';
+import { TransferProgress, TransferSummary } from '../../types';
 import { ConfirmDialog } from '../dialogs/ConfirmDialog';
 // Loaded on first use (CodeMirror is a large part of the bundle)
 const FilePreview = React.lazy(() => import('./FilePreview').then((m) => ({ default: m.FilePreview })));
-import { locale, tn, useT } from '../../i18n';
+import { tn, useT } from '../../i18n';
 import { formatBytes } from '../../utils/formatBytes';
-import { useMenuPosition } from '../../utils/useMenuPosition';
 
-type Side = 'local' | 'remote';
-type SortKey = 'name' | 'size' | 'modified';
-
-interface PaneState {
-  path: string;
-  parent: string | null;
-  entries: SftpFileEntry[];
-  loading: boolean;
-  error: string | null;
-  /** Text typed in the search box – filters the current folder instantly. */
-  filter: string;
-  /** Results of a recursive search (Enter in the search box); null = normal listing. */
-  searchResults: SftpFileEntry[] | null;
-  searchedFor: string;
-  searching: boolean;
-  selected: string[];
-  anchor: string | null;
-  sort: { key: SortKey; asc: boolean };
-}
-
-const emptyPane = (): PaneState => ({
-  path: '',
-  parent: null,
-  entries: [],
-  loading: false,
-  error: null,
-  filter: '',
-  searchResults: null,
-  searchedFor: '',
-  searching: false,
-  selected: [],
-  anchor: null,
-  sort: { key: 'name', asc: true },
-});
+import { Side, PaneState, emptyPane, baseName, remoteParent, DragInfo } from './sftp/sftpTypes';
+import { FilePane } from './sftp/FilePane';
+import { ChmodDialog, MoveDialog } from './sftp/SftpDialogs';
+import { SftpFileEntry } from '../../types';
 
 interface Props {
   isOpen: boolean;
@@ -113,52 +60,6 @@ export interface SftpTransferInfo {
   current: string | null;
   bytes: number;
   cancelling: boolean;
-}
-
-/** Compact modification time for the list (e.g. 23.10.26, 14:05); full date with seconds in the tooltip. */
-const formatDate = (secs: number): string =>
-  secs
-    ? new Date(secs * 1000).toLocaleString(locale(), {
-        year: '2-digit',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : '';
-const formatDateFull = (secs: number): string =>
-  secs ? new Date(secs * 1000).toLocaleString(locale(), { dateStyle: 'medium', timeStyle: 'medium' }) : '';
-
-const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
-
-const remoteParent = (p: string): string | null => {
-  const clean = p.replace(/\/+$/, '');
-  if (!clean || clean === '') return null;
-  const idx = clean.lastIndexOf('/');
-  if (idx < 0) return null;
-  return idx === 0 ? '/' : clean.slice(0, idx);
-};
-
-const fileIcon = (entry: SftpFileEntry) => {
-  if (entry.isDir) return <Folder className="h-3.5 w-3.5 shrink-0 text-amber-400" />;
-  const ext = entry.name.split('.').pop()?.toLowerCase() || '';
-  if (['zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar'].includes(ext))
-    return <FileArchive className="h-3.5 w-3.5 shrink-0 text-purple-400" />;
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext))
-    return <FileImage className="h-3.5 w-3.5 shrink-0 text-pink-400" />;
-  if (['sh', 'py', 'js', 'ts', 'json', 'yml', 'yaml', 'conf', 'ini', 'xml', 'sql', 'rs', 'go', 'php', 'env', 'toml'].includes(ext))
-    return <FileCode className="h-3.5 w-3.5 shrink-0 text-cyan-400" />;
-  return <File className="h-3.5 w-3.5 shrink-0 text-slate-400" />;
-};
-
-interface DragInfo {
-  from: Side;
-  paths: string[];
-  label: string;
-  x: number;
-  y: number;
-  overSide: Side | null;
-  overFolder: string | null;
 }
 
 export const SftpManager: React.FC<Props> = ({
@@ -204,6 +105,8 @@ export const SftpManager: React.FC<Props> = ({
   // File open in the preview / text editor
   const [preview, setPreview] = useState<{ side: Side; path: string; name: string; edit: boolean } | null>(null);
   const [osDropOver, setOsDropOver] = useState(false);
+  const [moveDialog, setMoveDialog] = useState<{ side: Side; paths: string[] } | null>(null);
+  const [chmodDialog, setChmodDialog] = useState<SftpFileEntry[] | null>(null);
   const transferIdRef = useRef<string>('');
   // Running upload/download that can be stopped, and whether "Przerwij" was clicked
   const [activeTransfer, setActiveTransfer] = useState<string | null>(null);
@@ -213,6 +116,10 @@ export const SftpManager: React.FC<Props> = ({
   const initializedRef = useRef(false);
 
   const panes = { local, remote };
+  const localRef = useRef(local);
+  localRef.current = local;
+  const remoteRef = useRef(remote);
+  remoteRef.current = remote;
   const setters = { local: setLocal, remote: setRemote };
 
   const showStatus = useCallback((text: string, type: 'ok' | 'error' = 'ok') => {
@@ -509,6 +416,83 @@ export const SftpManager: React.FC<Props> = ({
   }, [isOpen, transfer]);
 
   // --- In-app drag & drop between the panes (pointer based – works on every platform) ------------
+  // --- Rename / move / permissions -----------------------------------------------------------
+  const renameEntry = async (side: Side, entry: SftpFileEntry, newName: string): Promise<boolean> => {
+    if (busyRef.current) {
+      showBusyNotice();
+      return false;
+    }
+    try {
+      const path = side === 'local' ? await api.localRename(entry.path, newName) : await api.sftpRename(connectionId, entry.path, newName);
+      showStatus(t('Zmieniono nazwę „{from}” na „{to}”', { from: entry.name, to: baseName(path) }));
+      const pane = side === 'local' ? localRef.current : remoteRef.current;
+      await load(side, pane.path);
+      // Keep a running search in sync (the results are not re-run)
+      setters[side]((p) => ({
+        ...p,
+        selected: [path],
+        anchor: path,
+        searchResults: p.searchResults?.map((r) => (r.path === entry.path ? { ...r, path, name: baseName(path) } : r)) ?? null,
+      }));
+      return true;
+    } catch (err: any) {
+      showStatus(t('Nie udało się zmienić nazwy: {p0}', { p0: err?.message || err }), 'error');
+      return false;
+    }
+  };
+
+  const moveTo = useCallback(
+    async (side: Side, paths: string[], targetDir: string) => {
+      if (paths.length === 0) return;
+      if (busyRef.current) {
+        showBusyNotice();
+        return;
+      }
+      try {
+        const n = side === 'local' ? await api.localMove(paths, targetDir) : await api.sftpMove(connectionId, paths, targetDir);
+        showStatus(
+          n === 0
+            ? t('Elementy są już w katalogu „{dir}”', { dir: targetDir })
+            : tn(n, ['Przeniesiono {n} element do „{dir}”', 'Przeniesiono {n} elementy do „{dir}”', 'Przeniesiono {n} elementów do „{dir}”'], { n, dir: targetDir })
+        );
+      } catch (err: any) {
+        showStatus(t('Nie udało się przenieść: {p0}', { p0: err?.message || err }), 'error');
+      } finally {
+        const pane = side === 'local' ? localRef.current : remoteRef.current;
+        load(side, pane.path);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [connectionId, showStatus, showBusyNotice, t]
+  );
+
+  const applyChmod = async (entries: SftpFileEntry[], mode: number, recursive: boolean, scope: 'all' | 'files' | 'dirs') => {
+    if (busyRef.current) {
+      showBusyNotice();
+      return;
+    }
+    const label = t('Zmiana uprawnień…');
+    busyRef.current = label;
+    setBusy(label);
+    setStatus(null);
+    setProgress(null);
+    try {
+      const n = await api.sftpChmod(connectionId, entries.map((e) => e.path), mode, recursive, scope);
+      showStatus(
+        tn(n, ['Zmieniono uprawnienia {n} elementu na {mode}', 'Zmieniono uprawnienia {n} elementów na {mode}', 'Zmieniono uprawnienia {n} elementów na {mode}'], {
+          n,
+          mode: mode.toString(8).padStart(3, '0'),
+        })
+      );
+    } catch (err: any) {
+      showStatus(t('Nie udało się zmienić uprawnień: {p0}', { p0: err?.message || err }), 'error');
+    } finally {
+      busyRef.current = null;
+      setBusy(null);
+      await loadRemote(remoteRef.current.path);
+    }
+  };
+
   const pendingDragRef = useRef<{ from: Side; path: string; x: number; y: number } | null>(null);
   const dragRef = useRef<DragInfo | null>(null);
   dragRef.current = drag;
@@ -551,6 +535,8 @@ export const SftpManager: React.FC<Props> = ({
         setDrag(null);
         if (d.overSide && d.overSide !== d.from) {
           transfer(d.from, d.paths, d.overFolder ?? undefined);
+        } else if (d.overSide === d.from && d.overFolder && !d.paths.includes(d.overFolder)) {
+          moveTo(d.from, d.paths, d.overFolder);
         }
       }
     };
@@ -560,7 +546,7 @@ export const SftpManager: React.FC<Props> = ({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [local, remote, transfer]);
+  }, [local, remote, transfer, moveTo]);
 
   // --- Other actions ------------------------------------------------------------------------------
   const mkdir = async (side: Side, name: string) => {
@@ -834,6 +820,8 @@ export const SftpManager: React.FC<Props> = ({
           onTransfer={(paths) => transfer('local', paths)}
           onDelete={(paths) => deleteLocal(paths)}
           onPreview={(e, edit) => setPreview({ side: 'local', path: e.path, name: e.name, edit })}
+          onRename={(e, n) => renameEntry('local', e, n)}
+          onMove={(paths) => setMoveDialog({ side: 'local', paths })}
           transferLabel={t('Wyślij')}
           transferIcon={<ArrowRight className="h-3 w-3" />}
           onPin={canSaveDirs ? saveStartDirs : undefined}
@@ -861,6 +849,9 @@ export const SftpManager: React.FC<Props> = ({
           onTransfer={(paths) => transfer('remote', paths)}
           onDelete={deleteRemote}
           onPreview={(e, edit) => setPreview({ side: 'remote', path: e.path, name: e.name, edit })}
+          onRename={(e, n) => renameEntry('remote', e, n)}
+          onMove={(paths) => setMoveDialog({ side: 'remote', paths })}
+          onChmod={(entries) => entries.length && setChmodDialog(entries)}
           transferLabel={t('Pobierz')}
           transferIcon={<ArrowLeft className="h-3 w-3" />}
           onPasteFiles={pasteFromClipboard}
@@ -912,7 +903,7 @@ export const SftpManager: React.FC<Props> = ({
           </span>
         ) : (
           <span className="truncate text-slate-500">
-            {t('Przeciągnij pliki między panelami lub zaznacz je i użyj „Wyślij” / „Pobierz”. Dwuklik na pliku przenosi go na drugą stronę. Ctrl/Shift – zaznaczanie wielu.')}
+            {t('Przeciągnij pliki między panelami lub zaznacz je i użyj „Wyślij” / „Pobierz”. Dwuklik na pliku przenosi go na drugą stronę. Ctrl/Shift – zaznaczanie wielu, F2 – zmiana nazwy.')}
           </span>
         )}
       </div>
@@ -923,10 +914,13 @@ export const SftpManager: React.FC<Props> = ({
           className="pointer-events-none fixed z-[80] flex items-center gap-1.5 rounded-md border border-cyan-500/60 bg-slate-900/95 px-2 py-1 text-[11px] text-cyan-100 shadow-xl"
           style={{ left: drag.x + 14, top: drag.y + 10 }}
         >
-          {drag.from === 'local' ? <ArrowRight className="h-3 w-3" /> : <ArrowLeft className="h-3 w-3" />}
+          {drag.overSide === drag.from ? null : drag.from === 'local' ? <ArrowRight className="h-3 w-3" /> : <ArrowLeft className="h-3 w-3" />}
           {drag.label}
           {drag.overSide && drag.overSide !== drag.from && (
             <span className="text-slate-400">→ {drag.overFolder ? baseName(drag.overFolder) : t('bieżący katalog')}</span>
+          )}
+          {drag.overSide === drag.from && drag.overFolder && !drag.paths.includes(drag.overFolder) && (
+            <span className="text-amber-300">{t('przenieś do „{dir}”', { dir: baseName(drag.overFolder) })}</span>
           )}
         </div>
       )}
@@ -951,6 +945,29 @@ export const SftpManager: React.FC<Props> = ({
         </React.Suspense>
       )}
 
+      {moveDialog && (
+        <MoveDialog
+          paths={moveDialog.paths}
+          initialDir={(moveDialog.side === 'local' ? local : remote).path}
+          onCancel={() => setMoveDialog(null)}
+          onMove={(dir) => {
+            const d = moveDialog;
+            setMoveDialog(null);
+            moveTo(d.side, d.paths, dir);
+          }}
+        />
+      )}
+      {chmodDialog && (
+        <ChmodDialog
+          entries={chmodDialog}
+          onCancel={() => setChmodDialog(null)}
+          onApply={(mode, recursive, scope) => {
+            const entries = chmodDialog;
+            setChmodDialog(null);
+            applyChmod(entries, mode, recursive, scope);
+          }}
+        />
+      )}
       <ConfirmDialog
         isOpen={confirm !== null}
         title={confirm?.title || ''}
@@ -973,649 +990,3 @@ export const SftpManager: React.FC<Props> = ({
 // =================================================================================================
 // One pane (local or remote)
 // =================================================================================================
-
-interface PaneProps {
-  side: Side;
-  title: string;
-  icon: React.ReactNode;
-  pane: PaneState;
-  setPane: React.Dispatch<React.SetStateAction<PaneState>>;
-  busy: boolean;
-  drag: DragInfo | null;
-  suppressClickRef: React.MutableRefObject<boolean>;
-  paneRef?: React.RefObject<HTMLDivElement | null>;
-  osDropOver?: boolean;
-  onPointerStart: (path: string, x: number, y: number) => void;
-  onOpen: (path: string) => void;
-  onRefresh: () => void;
-  onHome: () => void;
-  /** Server pane: go to the directory of the shell in the SSH terminal */
-  onTerminalDir?: () => void;
-  onMkdir: (name: string) => void;
-  /** New empty file (opened in the editor). */
-  onMkfile?: (name: string) => void;
-  onSearch: (query: string) => void;
-  onTransfer: (paths: string[]) => void;
-  onDelete?: (paths: string[]) => void;
-  /** Opens a file: F3 = view (read-only), F4 = edit. */
-  onPreview?: (entry: SftpFileEntry, edit: boolean) => void;
-  transferLabel: string;
-  transferIcon: React.ReactNode;
-  transferFirst?: boolean;
-  extraTools?: React.ReactNode;
-  /** Context menu extras */
-  onPasteFiles?: () => void;
-  onPin?: () => void;
-}
-
-const FilePane: React.FC<PaneProps> = ({
-  side,
-  title,
-  icon,
-  pane,
-  setPane,
-  busy,
-  drag,
-  suppressClickRef,
-  paneRef,
-  osDropOver,
-  onPointerStart,
-  onOpen,
-  onRefresh,
-  onHome,
-  onTerminalDir,
-  onMkdir,
-  onMkfile,
-  onSearch,
-  onTransfer,
-  onDelete,
-  onPreview,
-  transferLabel,
-  transferIcon,
-  transferFirst,
-  extraTools,
-  onPasteFiles,
-  onPin,
-}) => {
-  const t = useT();
-  const [pathInput, setPathInput] = useState(pane.path);
-  const [menu, setMenu] = useState<{ x: number; y: number; entry: SftpFileEntry | null; targets: string[] } | null>(null);
-  // Name being typed for a new folder / file (null = no input shown)
-  const [newFolder, setNewFolder] = useState<string | null>(null);
-  const [newKind, setNewKind] = useState<'dir' | 'file'>('dir');
-  const startNew = (kind: 'dir' | 'file') => {
-    setNewKind(kind);
-    setNewFolder(kind === 'file' ? '.txt' : '');
-  };
-  useEffect(() => setPathInput(pane.path), [pane.path]);
-
-  const inSearch = pane.searchResults !== null;
-  const visible = useMemo(() => {
-    const base = pane.searchResults ?? pane.entries;
-    const f = inSearch ? '' : pane.filter.trim().toLowerCase();
-    const list = f ? base.filter((e) => e.name.toLowerCase().includes(f)) : [...base];
-    const { key, asc } = pane.sort;
-    list.sort((a, b) => {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-      let r = 0;
-      if (key === 'name') r = a.name.localeCompare(b.name, 'pl', { sensitivity: 'base', numeric: true });
-      else if (key === 'size') r = a.size - b.size;
-      else r = a.modified - b.modified;
-      return asc ? r : -r;
-    });
-    return list;
-  }, [pane.entries, pane.searchResults, pane.filter, pane.sort, inSearch]);
-
-  const selectedSet = useMemo(() => new Set(pane.selected), [pane.selected]);
-  const selectedEntries = visible.filter((e) => selectedSet.has(e.path));
-  const selectedBytes = selectedEntries.reduce((s, e) => s + (e.isDir ? 0 : e.size), 0);
-  const allSelected = visible.length > 0 && visible.every((e) => selectedSet.has(e.path));
-
-  const isDropTarget = !!drag && drag.from !== side && drag.overSide === side;
-
-  const rowClick = (e: React.MouseEvent, entry: SftpFileEntry) => {
-    if (suppressClickRef.current) return;
-    setPane((p) => {
-      if (e.shiftKey && p.anchor) {
-        const a = visible.findIndex((v) => v.path === p.anchor);
-        const b = visible.findIndex((v) => v.path === entry.path);
-        if (a >= 0 && b >= 0) {
-          const range = visible.slice(Math.min(a, b), Math.max(a, b) + 1).map((v) => v.path);
-          return { ...p, selected: Array.from(new Set([...(e.ctrlKey || e.metaKey ? p.selected : []), ...range])) };
-        }
-      }
-      if (e.ctrlKey || e.metaKey) {
-        const sel = p.selected.includes(entry.path)
-          ? p.selected.filter((s) => s !== entry.path)
-          : [...p.selected, entry.path];
-        return { ...p, selected: sel, anchor: entry.path };
-      }
-      return { ...p, selected: [entry.path], anchor: entry.path };
-    });
-  };
-
-  const toggle = (path: string) =>
-    setPane((p) => ({
-      ...p,
-      selected: p.selected.includes(path) ? p.selected.filter((s) => s !== path) : [...p.selected, path],
-      anchor: path,
-    }));
-
-  const toggleAll = () =>
-    setPane((p) => ({ ...p, selected: allSelected ? [] : visible.map((v) => v.path) }));
-
-  const sortBy = (key: SortKey) =>
-    setPane((p) => ({ ...p, sort: { key, asc: p.sort.key === key ? !p.sort.asc : true } }));
-
-  const sortMark = (key: SortKey) => (pane.sort.key === key ? (pane.sort.asc ? ' ▲' : ' ▼') : '');
-
-  const relPath = (entry: SftpFileEntry) => {
-    const root = pane.path.replace(/[\\/]+$/, '');
-    const parent = entry.path.slice(0, entry.path.length - entry.name.length).replace(/[\\/]+$/, '');
-    return parent.startsWith(root) ? parent.slice(root.length).replace(/^[\\/]/, '') || '.' : parent;
-  };
-
-  const transferButton = (
-    <button
-      onClick={() => onTransfer(pane.selected)}
-      disabled={busy || pane.selected.length === 0}
-      title={t('{transferLabel} zaznaczone ({length})', { transferLabel, length: pane.selected.length })}
-      className="flex h-6 items-center gap-1 rounded bg-cyan-600 px-2 font-semibold text-white hover:bg-cyan-500 disabled:opacity-40 disabled:hover:bg-cyan-600"
-    >
-      {transferFirst && transferIcon}
-      <span>
-        {transferLabel}
-        {pane.selected.length ? ` (${pane.selected.length})` : ''}
-      </span>
-      {!transferFirst && transferIcon}
-    </button>
-  );
-
-  return (
-    <div
-      ref={paneRef}
-      data-sftp-pane={side}
-      tabIndex={-1}
-      onContextMenu={(e) => {
-        // Never let the right click reach the terminal / application menus behind the SFTP window
-        e.stopPropagation();
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT') return; // keep the native cut/copy/paste menu in text fields
-        e.preventDefault();
-        const row = target.closest('[data-sftp-row]') as HTMLElement | null;
-        const entry = row ? visible.find((v) => v.path === row.dataset.sftpRow) ?? null : null;
-        let targets = pane.selected;
-        if (entry && !selectedSet.has(entry.path)) {
-          targets = [entry.path];
-          setPane((p) => ({ ...p, selected: [entry.path], anchor: entry.path }));
-        }
-        (e.currentTarget as HTMLElement).focus({ preventScroll: true });
-        setMenu({ x: e.clientX, y: e.clientY, entry, targets });
-      }}
-      onKeyDown={(e) => {
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT') return;
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-          e.preventDefault();
-          setPane((p) => ({ ...p, selected: visible.map((v) => v.path) }));
-        } else if (e.key === 'Backspace' && pane.parent && !inSearch) {
-          e.preventDefault();
-          onOpen(pane.parent);
-        } else if ((e.key === 'F3' || e.key === 'F4') && onPreview && selectedEntries.length === 1 && !selectedEntries[0].isDir) {
-          e.preventDefault();
-          onPreview(selectedEntries[0], e.key === 'F4');
-        } else if (e.key === 'Delete' && onDelete && pane.selected.length) {
-          e.preventDefault();
-          onDelete(pane.selected);
-        } else if (e.key === 'Enter' && selectedEntries.length === 1 && selectedEntries[0].isDir) {
-          e.preventDefault();
-          onOpen(selectedEntries[0].path);
-        }
-      }}
-      className={`@container relative flex min-w-0 flex-1 flex-col outline-none ${
-        isDropTarget || osDropOver ? 'bg-cyan-950/30 ring-2 ring-inset ring-cyan-500/70' : ''
-      }`}
-    >
-      {/* Title + transfer */}
-      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/60 px-2">
-        <div className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-200">
-          {icon}
-          <span className="truncate">{title}</span>
-        </div>
-        {transferButton}
-      </div>
-
-      {/* Toolbar: navigation, path, new folder, search */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-slate-800 px-2 py-1">
-        <button
-          onClick={() => pane.parent && onOpen(pane.parent)}
-          disabled={!pane.parent || pane.loading}
-          title={t('Katalog nadrzędny (Backspace)')}
-          className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
-        >
-          <ArrowUp className="h-3 w-3" />
-        </button>
-        <button
-          onClick={onHome}
-          title={t('Katalog domowy')}
-          className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
-        >
-          <Home className="h-3 w-3" />
-        </button>
-        {onTerminalDir && (
-          <button
-            onClick={onTerminalDir}
-            disabled={pane.loading}
-            title={t('Przejdź do katalogu, w którym jesteś w terminalu SSH')}
-            className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-emerald-300 hover:bg-slate-700 disabled:opacity-40"
-          >
-            <SquareTerminal className="h-3 w-3" />
-          </button>
-        )}
-        <button
-          onClick={onRefresh}
-          title={t('Odśwież (Ctrl+R)')}
-          className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
-        >
-          <RefreshCw className={`h-3 w-3 ${pane.loading ? 'animate-spin' : ''}`} />
-        </button>
-        <input
-          value={pathInput}
-          onChange={(e) => setPathInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') onOpen(pathInput.trim());
-          }}
-          title={pane.path}
-          className="h-6 min-w-[64px] flex-1 rounded border border-slate-700 bg-slate-950 px-2 font-mono text-[10.5px] text-slate-200 focus:border-cyan-500 focus:outline-none"
-        />
-        <button
-          onClick={() => startNew('dir')}
-          title={t('Nowy katalog')}
-          className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-amber-300 hover:bg-slate-700"
-        >
-          <FolderPlus className="h-3 w-3" />
-        </button>
-        {onMkfile && (
-          <button
-            onClick={() => startNew('file')}
-            title={t('Nowy plik')}
-            className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-cyan-300 hover:bg-slate-700"
-          >
-            <FilePlus className="h-3 w-3" />
-          </button>
-        )}
-        {extraTools}
-        {onPreview && (
-          <button
-            onClick={() => selectedEntries.length === 1 && !selectedEntries[0].isDir && onPreview(selectedEntries[0], false)}
-            disabled={selectedEntries.length !== 1 || selectedEntries[0].isDir}
-            title={t('Podgląd pliku (F3)')}
-            className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
-          >
-            <Eye className="h-3 w-3" />
-          </button>
-        )}
-        {onDelete && (
-          <button
-            onClick={() => onDelete(pane.selected)}
-            disabled={busy || pane.selected.length === 0}
-            title={side === 'local' ? t('Przenieś zaznaczone do kosza (Delete)') : t('Usuń zaznaczone z serwera (Delete)')}
-            className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-red-500/20 hover:text-red-400 disabled:opacity-40"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        )}
-        <div className="relative flex h-6 w-full items-center @md:w-44">
-          <Search className="pointer-events-none absolute left-2 h-3 w-3 text-slate-500" />
-          <input
-            value={pane.filter}
-            onChange={(e) => setPane((p) => ({ ...p, filter: e.target.value, searchResults: e.target.value ? p.searchResults : null }))}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') onSearch(pane.filter);
-              if (e.key === 'Escape') {
-                e.stopPropagation();
-                setPane((p) => ({ ...p, filter: '', searchResults: null }));
-              }
-            }}
-            placeholder={t('Filtruj… (Enter: szukaj głębiej)')}
-            title={t('Pisanie filtruje bieżący katalog. Enter przeszukuje także podkatalogi.')}
-            className="h-6 w-full rounded border border-slate-700 bg-slate-950 pl-6 pr-6 text-[10.5px] text-slate-200 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
-          />
-          {(pane.filter || inSearch) && (
-            <button
-              onClick={() => setPane((p) => ({ ...p, filter: '', searchResults: null }))}
-              className="absolute right-1.5 text-slate-500 hover:text-white"
-              title={t('Wyczyść')}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Search banner */}
-      {(inSearch || pane.searching) && (
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-cyan-950/40 px-2 py-1 text-[10.5px] text-cyan-200">
-          {pane.searching ? (
-            <span className="flex items-center gap-1.5">
-              <Loader2 className="h-3 w-3 animate-spin" /> {t('Przeszukiwanie podkatalogów…')}
-            </span>
-          ) : (
-            <span>
-              {t('Wyniki dla „{q}” w {path}: {n}', { q: pane.searchedFor, path: pane.path, n: pane.searchResults?.length ?? 0 })}
-              {(pane.searchResults?.length ?? 0) >= 500 ? t(' (pokazano pierwsze 500)') : ''}
-            </span>
-          )}
-          <button
-            onClick={() => setPane((p) => ({ ...p, filter: '', searchResults: null }))}
-            className="text-cyan-300 hover:text-white"
-          >
-            {t('Zamknij wyniki')}
-          </button>
-        </div>
-      )}
-
-      {/* Column headers */}
-      <div className="grid shrink-0 grid-cols-[22px_1fr_58px_104px] @md:grid-cols-[22px_1fr_70px_120px] items-center border-b border-slate-800 bg-slate-900/40 px-1 py-1 text-[10px] font-semibold text-slate-400">
-        <button onClick={toggleAll} className="flex justify-center text-slate-400 hover:text-cyan-300" title={t('Zaznacz wszystko (Ctrl+A)')}>
-          {allSelected ? (
-            <CheckSquare className="h-3.5 w-3.5 text-cyan-400" />
-          ) : pane.selected.length ? (
-            <MinusSquare className="h-3.5 w-3.5 text-cyan-400" />
-          ) : (
-            <Square className="h-3.5 w-3.5" />
-          )}
-        </button>
-        <button onClick={() => sortBy('name')} className="text-left hover:text-white">
-          {t('Nazwa')}{sortMark('name')}
-        </button>
-        <button onClick={() => sortBy('size')} className="text-right hover:text-white pr-1">
-          {t('Rozmiar')}{sortMark('size')}
-        </button>
-        <button onClick={() => sortBy('modified')} className="truncate text-right hover:text-white pr-1">
-          {t('Zmodyfikowano')}{sortMark('modified')}
-        </button>
-      </div>
-
-      {/* List */}
-      <div className="sidebar-scroll min-h-0 flex-1 overflow-y-auto select-none">
-        {newFolder !== null && (
-          <div className="flex items-center gap-1.5 border-b border-slate-800 bg-amber-950/20 px-2 py-1">
-            {newKind === 'file' ? <FilePlus className="h-3.5 w-3.5 shrink-0 text-cyan-400" /> : <FolderPlus className="h-3.5 w-3.5 shrink-0 text-amber-400" />}
-            <input
-              autoFocus
-              // New file: the cursor goes before the suggested ".txt"
-              onFocus={(e) => newKind === 'file' && e.currentTarget.setSelectionRange(0, 0)}
-              value={newFolder}
-              onChange={(e) => setNewFolder(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newFolder.trim()) {
-                  if (newKind === 'file') onMkfile?.(newFolder.trim());
-                  else onMkdir(newFolder.trim());
-                  setNewFolder(null);
-                } else if (e.key === 'Escape') {
-                  e.stopPropagation();
-                  setNewFolder(null);
-                }
-              }}
-              onBlur={() => setNewFolder(null)}
-              placeholder={newKind === 'file' ? t('Nazwa nowego pliku – Enter, aby utworzyć i otworzyć') : t('Nazwa nowego katalogu – Enter, aby utworzyć')}
-              className="h-6 flex-1 rounded border border-amber-500/50 bg-slate-950 px-2 text-[11px] text-white focus:outline-none"
-            />
-          </div>
-        )}
-
-        {/* ".." – parent folder entry (like FileZilla / WinSCP); also a drop target */}
-        {pane.parent && !inSearch && !(pane.loading && pane.entries.length === 0) && (
-          <div
-            data-sftp-dir={pane.parent}
-            data-sftp-side={side}
-            onDoubleClick={() => onOpen(pane.parent!)}
-            title={t('Katalog nadrzędny: {path}\nDwuklik: otwórz (Backspace)', { path: pane.parent })}
-            className={`grid cursor-default grid-cols-[22px_1fr_58px_104px] @md:grid-cols-[22px_1fr_70px_120px] items-center px-1 py-[3px] text-[11px] ${
-              drag && drag.from !== side && drag.overFolder === pane.parent
-                ? 'bg-cyan-700/40 ring-1 ring-inset ring-cyan-400'
-                : 'text-slate-300 hover:bg-slate-800/60'
-            }`}
-          >
-            <span />
-            <div className="flex min-w-0 items-center gap-1.5">
-              <FolderUp className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-              <span className="font-mono font-medium text-amber-100">..</span>
-            </div>
-            <span />
-            <span />
-          </div>
-        )}
-
-        {pane.error ? (
-          <div className="m-2 rounded border border-red-500/30 bg-red-500/10 p-2 text-[11px] text-red-300">{pane.error}</div>
-        ) : pane.loading && pane.entries.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-slate-400">
-            <Loader2 className="h-4 w-4 animate-spin" /> Wczytywanie…
-          </div>
-        ) : visible.length === 0 ? (
-          <div className="py-8 text-center text-[11px] text-slate-500">
-            {inSearch ? t('Brak wyników') : pane.filter ? t('Brak elementów pasujących do filtra') : t('Katalog jest pusty')}
-          </div>
-        ) : (
-          visible.map((entry) => {
-            const selected = selectedSet.has(entry.path);
-            const isDropFolder = entry.isDir && drag && drag.from !== side && drag.overFolder === entry.path;
-            return (
-              <div
-                key={entry.path}
-                data-sftp-row={entry.path}
-                data-sftp-dir={entry.isDir ? entry.path : undefined}
-                data-sftp-side={side}
-                onMouseDown={(e) => {
-                  if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
-                  (e.currentTarget.closest('[data-sftp-pane]') as HTMLElement | null)?.focus({ preventScroll: true });
-                  onPointerStart(entry.path, e.clientX, e.clientY);
-                }}
-                onClick={(e) => rowClick(e, entry)}
-                onDoubleClick={() => (entry.isDir ? onOpen(entry.path) : onTransfer([entry.path]))}
-                title={
-                  entry.isDir
-                    ? t('{path}\nDwuklik: otwórz', { path: entry.path })
-                    : t('{path}\nDwuklik: {action}', { path: entry.path, action: transferLabel.toLowerCase() })
-                }
-                className={`grid cursor-default grid-cols-[22px_1fr_58px_104px] @md:grid-cols-[22px_1fr_70px_120px] items-center px-1 py-[3px] text-[11px] ${
-                  isDropFolder
-                    ? 'bg-cyan-700/40 ring-1 ring-inset ring-cyan-400'
-                    : selected
-                      ? 'bg-cyan-900/45 text-white'
-                      : 'text-slate-300 hover:bg-slate-800/60'
-                }`}
-              >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggle(entry.path);
-                  }}
-                  className="flex justify-center text-slate-500 hover:text-cyan-300"
-                >
-                  {selected ? <CheckSquare className="h-3.5 w-3.5 text-cyan-400" /> : <Square className="h-3.5 w-3.5" />}
-                </button>
-                <div className="flex min-w-0 items-center gap-1.5">
-                  {fileIcon(entry)}
-                  <span className={`truncate ${entry.isDir ? 'font-medium text-amber-100' : ''} ${entry.isLink ? 'italic' : ''}`}>
-                    {entry.name}
-                  </span>
-                  {entry.isLink && (
-                    <span title={t('Dowiązanie symboliczne')} className="shrink-0">
-                      <Link2 className="h-3 w-3 text-cyan-400/80" />
-                    </span>
-                  )}
-                  {inSearch && <span className="truncate font-mono text-[9.5px] text-slate-500">{relPath(entry)}</span>}
-                </div>
-                <div className="pr-1 text-right font-mono text-[10px] text-slate-500">{entry.isDir ? '' : formatBytes(entry.size)}</div>
-                <div className="truncate pl-1.5 pr-1 text-right font-mono text-[10px] text-slate-500" title={formatDateFull(entry.modified)}>
-                  {formatDate(entry.modified)}
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* Footer */}
-      <div className="flex h-6 shrink-0 items-center justify-between border-t border-slate-800 px-2 text-[10px] text-slate-500">
-        <span>
-          {tn(visible.length, ['{n} element', '{n} elementy', '{n} elementów'], { n: visible.length })}
-          {pane.selected.length > 0 &&
-            ' · ' + t('zaznaczono {n}', { n: pane.selected.length }) + (selectedBytes ? ` (${formatBytes(selectedBytes)})` : '')}
-        </span>
-        {side === 'remote' && <span className="hidden @md:inline">{t('Upuść tu pliki z systemu, aby je wysłać')}</span>}
-      </div>
-
-      {menu && (
-        <PaneContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
-          {menu.entry?.isDir && (
-            <MenuItem icon={<FolderOpen className="h-3.5 w-3.5 text-amber-400" />} onClick={() => onOpen(menu.entry!.path)}>
-              {t('Otwórz')}
-            </MenuItem>
-          )}
-          {menu.targets.length > 0 && (
-            <MenuItem icon={transferIcon} disabled={busy} onClick={() => onTransfer(menu.targets)}>
-              {transferLabel} {menu.targets.length > 1 ? t('zaznaczone ({length})', { length: menu.targets.length }) : t('„{name}”', { name: baseName(menu.targets[0]) })}
-            </MenuItem>
-          )}
-          {onPreview && menu.entry && !menu.entry.isDir && (
-            <>
-              <MenuItem icon={<Eye className="h-3.5 w-3.5 text-cyan-300" />} onClick={() => onPreview(menu.entry!, false)}>
-                {t('Podgląd (F3)')}
-              </MenuItem>
-              <MenuItem icon={<Pencil className="h-3.5 w-3.5 text-cyan-300" />} onClick={() => onPreview(menu.entry!, true)}>
-                {t('Edytuj (F4)')}
-              </MenuItem>
-            </>
-          )}
-          {onDelete && menu.targets.length > 0 && (
-            <MenuItem icon={<Trash2 className="h-3.5 w-3.5 text-red-400" />} danger disabled={busy} onClick={() => onDelete(menu.targets)}>
-              {side === 'local' ? t('Przenieś do kosza') : t('Usuń')}{menu.targets.length > 1 ? ` (${menu.targets.length})` : ''}
-            </MenuItem>
-          )}
-          {menu.entry && (
-            <MenuItem
-              icon={<Copy className="h-3.5 w-3.5 text-slate-400" />}
-              onClick={() => api.clipboardWriteText(menu.entry!.path).catch(() => {})}
-            >
-              {t('Kopiuj ścieżkę')}
-            </MenuItem>
-          )}
-          {(menu.entry || menu.targets.length > 0) && <div className="my-1 border-t border-slate-800" />}
-          <MenuItem icon={<FolderPlus className="h-3.5 w-3.5 text-amber-300" />} onClick={() => startNew('dir')}>
-            {t('Nowy katalog')}
-          </MenuItem>
-          {onMkfile && (
-            <MenuItem icon={<FilePlus className="h-3.5 w-3.5 text-cyan-300" />} onClick={() => startNew('file')}>
-              {t('Nowy plik')}
-            </MenuItem>
-          )}
-          {onPasteFiles && (
-            <MenuItem icon={<ClipboardPaste className="h-3.5 w-3.5 text-emerald-400" />} disabled={busy} onClick={onPasteFiles}>
-              {t('Wyślij pliki ze schowka systemu')}
-            </MenuItem>
-          )}
-          {onPin && (
-            <MenuItem icon={<Pin className="h-3.5 w-3.5 text-slate-400" />} onClick={onPin}>
-              {t('Zapamiętaj bieżące katalogi dla połączenia')}
-            </MenuItem>
-          )}
-          {pane.parent && !inSearch && (
-            <MenuItem icon={<ArrowUp className="h-3.5 w-3.5 text-slate-400" />} onClick={() => onOpen(pane.parent!)}>
-              {t('Katalog nadrzędny')}
-            </MenuItem>
-          )}
-          <MenuItem icon={<RefreshCw className="h-3.5 w-3.5 text-slate-400" />} onClick={onRefresh}>
-            {t('Odśwież')}
-          </MenuItem>
-          <MenuItem
-            icon={<CheckSquare className="h-3.5 w-3.5 text-slate-400" />}
-            onClick={() => setPane((p) => ({ ...p, selected: visible.map((v) => v.path) }))}
-          >
-            {t('Zaznacz wszystko')}
-          </MenuItem>
-        </PaneContextMenu>
-      )}
-    </div>
-  );
-};
-
-// =================================================================================================
-// Context menu of a pane
-// =================================================================================================
-
-const PaneContextMenu: React.FC<{ x: number; y: number; onClose: () => void; children: React.ReactNode }> = ({
-  x,
-  y,
-  onClose,
-  children,
-}) => {
-  const ref = useRef<HTMLDivElement>(null);
-  const menuStyle = useMenuPosition(ref, { x, y });
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation(); // close only the menu, not the whole SFTP window
-        onClose();
-      }
-    };
-    const onScroll = () => onClose();
-    window.addEventListener('mousedown', onDown, true);
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('wheel', onScroll, true);
-    window.addEventListener('blur', onClose);
-    window.addEventListener('resize', onClose);
-    return () => {
-      window.removeEventListener('mousedown', onDown, true);
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('wheel', onScroll, true);
-      window.removeEventListener('blur', onClose);
-      window.removeEventListener('resize', onClose);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      ref={ref}
-      role="menu"
-      onContextMenu={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-      onClick={onClose}
-      style={menuStyle}
-      className="fixed z-[75] min-w-52 rounded-lg border border-slate-700 bg-slate-900/95 py-1 text-xs text-slate-200 shadow-xl shadow-black/50 backdrop-blur-md"
-    >
-      {children}
-    </div>
-  );
-};
-
-const MenuItem: React.FC<{
-  icon: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-  children: React.ReactNode;
-}> = ({ icon, onClick, disabled, danger, children }) => (
-  <button
-    type="button"
-    role="menuitem"
-    disabled={disabled}
-    onClick={onClick}
-    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
-      danger ? 'hover:bg-red-500/20 hover:text-red-300' : 'hover:bg-slate-800'
-    }`}
-  >
-    <span className="flex w-3.5 shrink-0 justify-center">{icon}</span>
-    <span className="truncate">{children}</span>
-  </button>
-);

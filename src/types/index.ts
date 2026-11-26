@@ -151,6 +151,18 @@ export interface UiSettings {
   confirmAppExit: boolean;
   /** Lines of SSH terminal history (scrollback); default 10 000. */
   terminalScrollback?: number;
+  /** Open the tabs from the last run after unlocking (off by default). */
+  restoreSessions?: boolean;
+}
+
+/** Tabs kept for "Restore previous sessions". */
+export interface SavedWorkspace {
+  /** Connection ids in tab order. */
+  tabs: string[];
+  layout: WorkspaceLayout;
+  /** Tab shown in each pane (index into `tabs`, -1 = empty). */
+  panes: number[];
+  active?: number | null;
 }
 
 export interface BackupEntry {

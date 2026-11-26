@@ -18,6 +18,8 @@ The application uses **Tauri 2 and Rust** for the native backend, **React 19 and
 - Polish and English user interface – switch the language in the header, on the login screen or in Settings (applied instantly).
 - Dark or light theme (Settings), optionally with a dark terminal in the light theme.
 - Connection tree with nested groups, colours, search (name, host, IP, tags) and drag & drop. Group expansion and per-group A–Z sorting are remembered between launches.
+- **Command palette** (Ctrl+K, in a session Ctrl+Shift+K): fuzzy search over connections (name, host, user, tags, folder); Enter connects. **Quick Connect** – type `ssh root@10.0.0.15:2222` or `rdp admin@srv01` to connect without saving (the password stays in memory only); the tab menu can save it in the vault later.
+- Optional **restore of previous sessions** after unlocking (tabs, layout and panes; off by default).
 - Group context menus: connect to a group, add hosts or subgroups, sort, edit, delete, and expand or collapse all groups.
 - Clone a saved connection configuration (after confirmation) or open another session using the same connection.
 - Tabs and split-screen layouts: single, horizontal, vertical, 3 columns and 2×2 grid. Reorder tabs by dragging or from the tab menu (move to the beginning/end, left/right) without interrupting the connection; drag tabs between panes and choose a session for each pane.
@@ -38,7 +40,8 @@ The application uses **Tauri 2 and Rust** for the native backend, **React 19 and
 ### SFTP – two-pane file manager
 - Local files on the left, server files on the right (WinSCP / FileZilla style); takes half of the pane, or the whole pane in split layouts.
 - Multi-selection (click, Ctrl, Shift, Ctrl+A) and one-click upload / download of files and whole folders.
-- Keyboard: Ctrl+R refreshes the pane in use (both panes when the focus is elsewhere in the window), Backspace goes up, Enter opens a folder, Delete deletes (permanently on the server, to the trash on this computer), Esc closes the window.
+- Keyboard: Ctrl+R refreshes the pane in use (both panes when the focus is elsewhere in the window), Backspace goes up, Enter opens a folder, **F2 renames**, Delete deletes (permanently on the server, to the trash on this computer), Esc closes the window.
+- **Move** files and folders to another folder (dialog, or drag onto a folder in the same pane) and change **permissions (chmod)** on the server – checkboxes or octal, optionally recursive (all / files only / folders only). Existing files are never overwritten.
 - Drag & drop between the panes, onto folders and from the system file manager.
 - Filtering and recursive search on both sides, creating and deleting files and folders on both sides (a new empty file opens straight in the editor). Local files go to the Recycle Bin (Windows) / desktop trash (Linux); when there is no trash (e.g. a network drive), the program asks before deleting permanently.
 - Transfer progress (files and data transferred) with a **Stop** button. Files are written to a temporary file next to the target (`.name.rf-part`) and replace an existing file only when complete – in both directions – so a stopped or failed transfer never leaves a truncated file and an existing file keeps its previous content (and permissions on the server). Overwrite confirmation and right-click context menus. Server deletion shows the current path and selected-item counter, followed by a result or error; folders are deleted recursively.

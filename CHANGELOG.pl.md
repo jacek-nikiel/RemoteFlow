@@ -9,7 +9,13 @@ Wersja jest zapisana w trzech plikach, które muszą być zgodne (pilnuje tego t
 Każde wydanie ma sekcję dla tej samej wersji (`## X.Y.Z – …`) w tym pliku i w angielskim `CHANGELOG.md`; obie trafiają do opisu
 wydania, a okienko aktualizacji w programie pokazuje tę w języku interfejsu.
 
-## Niewydane (trafi do kolejnej wersji)
+## 1.18.0 – paleta poleceń i szybkie połączenie, zmiana nazwy/przenoszenie/uprawnienia w SFTP, przywracanie sesji
+
+### Dodane
+- **Paleta poleceń (Ctrl+K, w sesji Ctrl+Shift+K)** – także przycisk **Szukaj** w nagłówku. Rozmyte wyszukiwanie zapisanych połączeń po nazwie, hoście, użytkowniku, tagach i folderze (np. „prod db”, „wp1”); Enter łączy albo przechodzi do otwartej karty, Shift+Enter otwiera kolejną kartę. Lista zawiera tylko połączenia, więc jest krótka.
+- **Szybkie połączenie:** wpisz w palecie `ssh root@10.0.0.15:2222`, `ssh -p 2222 deploy@web1`, `rdp admin@srv01` albo `użytkownik@host` i połącz się bez zapisywania połączenia. Hasło albo agent SSH; hasło zostaje tylko w pamięci do zamknięcia karty lub zablokowania sejfu hasłem głównym. Klucze hostów i certyfikaty RDP są sprawdzane jak zwykle. Menu karty ma **Zapisz połączenie w sejfie…** (otwiera wypełniony formularz połączenia).
+- **SFTP: zmiana nazwy (F2)** w miejscu w obu panelach, **Przenieś do…** (okno z katalogiem albo przeciągnięcie na katalog w tym samym panelu) i **Uprawnienia…** na serwerze (pola rwx, zapis ósemkowy, SUID/SGID/sticky, opcjonalnie rekurencyjnie dla plików i katalogów, tylko plików albo tylko katalogów; dowiązania symboliczne są pomijane). Nic nie jest nadpisywane. Podpowiedź wiersza na serwerze pokazuje uprawnienia.
+- **Przywróć poprzednie sesje** (Ustawienia → Potwierdzenia, domyślnie wyłączone): po odblokowaniu otwierają się karty, układ i panele z ostatniego uruchomienia. Lista jest w zaszyfrowanym sejfie i aktualizowana na bieżąco, więc przetrwa też awarię albo wyłączenie komputera; szybkie połączenia nie są zapamiętywane.
 
 ### Poprawione
 - **Foldery:** folderu nie da się już umieścić we własnym podfolderze (wcześniej zawieszało to pasek boczny). Istniejące pętle są naprawiane przy otwarciu sejfu. Usunięcie folderu przenosi jego podfoldery poziom wyżej zamiast je ukrywać.
@@ -18,6 +24,7 @@ wydania, a okienko aktualizacji w programie pokazuje tę w języku interfejsu.
 - **PIN:** wszędzie 4–12 cyfr; kropki pokazują wpisane cyfry; pusty PIN jest odrzucany z komunikatem.
 - **Blokada z FreeRDP:** wbudowane okna FreeRDP są ukrywane od razu po zablokowaniu sejfu (także przy blokadzie Windows / uśpieniu), więc nic nie wystaje nad ekran blokady.
 - **Przeglądarka folderów RDP:** „w górę” i „Wyślij ten katalog” działają także na ścieżkach Windows.
+- **Karty otwierane szybko jedna po drugiej** (np. przywracane) mogły trafić do złego panelu podzielonego ekranu.
 
 ### Zmienione
 - **Przeciąganie plików działa w Windows:** przeciągnij pliki lub katalogi na terminal SSH albo obraz RDP. W terminalu trafiają do bieżącego katalogu powłoki tym samym transferem co w oknie SFTP (postęp na przycisku Pliki, Stop w oknie). Ctrl+V skopiowanych plików w terminalu działa tak samo.

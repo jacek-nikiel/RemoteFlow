@@ -627,6 +627,21 @@ export const SettingsModal: React.FC<Props> = ({
                   className="h-4 w-4 rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
                 />
               </label>
+
+              <label className="flex items-center justify-between cursor-pointer pt-2 border-t border-slate-800/80">
+                <div className="text-xs text-slate-300">
+                  {t('Przywróć poprzednie sesje')}
+                  <div className="text-[10px] text-slate-500">
+                    {t('Po odblokowaniu otwiera zakładki i układ z ostatniego uruchomienia (lista jest zapisana w zaszyfrowanym sejfie)')}
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={!!uiSettings.restoreSessions}
+                  onChange={(e) => setUiSettings((u) => ({ ...u, restoreSessions: e.target.checked }))}
+                  className="h-4 w-4 rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
+                />
+              </label>
             </div>
 
             {/* Periodic vault backups */}

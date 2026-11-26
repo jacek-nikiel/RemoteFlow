@@ -20,7 +20,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const MAX_DEPTH: u32 = 32;
+pub const MAX_DEPTH: u32 = 32;
 const SEARCH_MAX_RESULTS: usize = 500;
 const SEARCH_MAX_DIRS: usize = 20_000;
 const SEARCH_MAX_DEPTH: u32 = 12;
@@ -182,7 +182,7 @@ fn remote_entry(sftp: Option<&ssh2::Sftp>, path: &Path, stat: &ssh2::FileStat) -
     })
 }
 
-fn is_remote_symlink(stat: &ssh2::FileStat) -> bool {
+pub fn is_remote_symlink(stat: &ssh2::FileStat) -> bool {
     stat.file_type() == ssh2::FileType::Symlink
 }
 
@@ -255,16 +255,16 @@ pub fn sanitize_name(name: &str) -> Result<String, String> {
         || n.contains('\\')
         || n.chars().any(|c| c.is_control())
     {
-        return Err(format!("Niedozwolona nazwa: '{}'", name));
+        return Err(tr!("Niedozwolona nazwa: '{}'", "Name not allowed: '{}'", name));
     }
     #[cfg(target_os = "windows")]
     if n.chars().any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')) {
-        return Err(format!("Nazwa zawiera znaki niedozwolone w Windows: '{}'", name));
+        return Err(tr!("Nazwa zawiera znaki niedozwolone w Windows: '{}'", "The name contains characters not allowed in Windows: '{}'", name));
     }
     Ok(n.to_string())
 }
 
-fn remote_join(dir: &str, name: &str) -> PathBuf {
+pub fn remote_join(dir: &str, name: &str) -> PathBuf {
     let base = if dir.is_empty() { "." } else { dir };
     Path::new(base).join(name)
 }

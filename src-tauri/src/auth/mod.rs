@@ -280,6 +280,7 @@ pub(crate) fn vault_init_impl(master_password: &str, state: &AuthState) -> Resul
         known_hosts: BTreeMap::new(),
         backup: Default::default(),
         ui: Default::default(),
+        saved_workspace: None,
     };
     set_current_canary(&key, &mut metadata)?;
 
@@ -454,6 +455,7 @@ pub(crate) fn vault_unlock_master_impl(master_password: &str, accept_modified: O
 #[tauri::command]
 pub fn vault_lock(state: tauri::State<'_, AuthState>, app: tauri::AppHandle) -> Result<(), String> {
     crate::session::rdp_embed::set_locked(&app, true);
+    crate::session::adhoc::clear();
     let mut mgr = lock_auth(&state)?;
     mgr.clear();
     Ok(())
@@ -634,6 +636,7 @@ pub fn vault_reset(state: tauri::State<'_, AuthState>) -> Result<VaultStatus, St
     // Non-destructive: the current file is renamed to vault.json.bak_<timestamp>.
     delete_vault()?;
     crate::vault::known_hosts::forget_verified();
+    crate::session::adhoc::clear();
     let mut mgr = lock_auth(&state)?;
     mgr.clear();
     Ok(build_status(None, &mgr, None))

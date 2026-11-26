@@ -39,6 +39,8 @@ interface Props {
   defaultGroupId: string | null;
   /** Creates a new folder/group directly from the connection form. */
   onCreateGroup?: (group: Group) => Promise<Group>;
+  /** New connection pre-filled from a quick connection ("Save in the vault" on its tab). */
+  draft?: Partial<Connection> | null;
 }
 
 export const ConnectionModal: React.FC<Props> = ({
@@ -50,6 +52,7 @@ export const ConnectionModal: React.FC<Props> = ({
   credentials,
   defaultGroupId,
   onCreateGroup,
+  draft,
 }) => {
   const t = useT();
   const [activeTab, setActiveTab] = useState<'general' | 'auth' | 'tunnels' | 'rdp' | 'notes'>('general');
@@ -170,12 +173,20 @@ export const ConnectionModal: React.FC<Props> = ({
       setDefaultDownloadDir('');
       setSftpLocalDir('');
       setSftpRemoteDir('');
+      if (draft) {
+        setName(draft.name ?? '');
+        if (draft.protocol) setProtocol(draft.protocol);
+        if (draft.host) setHost(draft.host);
+        if (draft.port) setPort(draft.port);
+        setUsername(draft.username ?? '');
+        if (draft.sshAuthType) setSshAuthType(draft.sshAuthType);
+      }
     }
     setActiveTab('general');
     setError(null);
     setIsAddingGroup(false);
     setGroupError(null);
-  }, [editingConnection, defaultGroupId, isOpen]);
+  }, [editingConnection, defaultGroupId, isOpen, draft]);
 
   const handleCreateGroup = async () => {
     if (!onCreateGroup) return;

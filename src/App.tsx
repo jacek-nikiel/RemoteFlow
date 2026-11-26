@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api, isTauri } from './services/api';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Connection, Credential, Group, SessionInfo, UiSettings, VaultStatus, WorkspaceLayout } from './types';
+import { Connection, Credential, Group, SavedWorkspace, SessionInfo, UiSettings, VaultStatus, WorkspaceLayout } from './types';
 import { setTerminalScrollback } from './utils/terminalSettings';
 import { Header } from './components/layout/Header';
 import { Sidebar } from './components/sidebar/Sidebar';
@@ -19,6 +19,8 @@ import { ImportExportModal } from './components/dialogs/ImportExportModal';
 import { PassphrasePromptModal } from './components/dialogs/PassphrasePromptModal';
 import { ConfirmDialog, DialogAnchor } from './components/dialogs/ConfirmDialog';
 import { Loader2 } from 'lucide-react';
+import { CommandPalette } from './components/palette/CommandPalette';
+import { QuickTarget } from './utils/quickConnect';
 import { RdpCertificateDialog } from './components/dialogs/RdpCertificateDialog';
 import { EmptyPasswordDialog } from './components/dialogs/EmptyPasswordDialog';
 import { PasswordPromptCancelled } from './utils/passwordPrompt';
@@ -47,6 +49,11 @@ const t = useT();
 
   // Active Sessions, Split Layout & Panes
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  // Quick Connect (command palette): connections not saved in the vault, kept while their tabs are open
+  const [adhocConnections, setAdhocConnections] = useState<Connection[]>([]);
+  const allConnections = useMemo(() => [...connections, ...adhocConnections], [connections, adhocConnections]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [connDraft, setConnDraft] = useState<Partial<Connection> | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [layout, setLayout] = useState<WorkspaceLayout>('single');
   const [paneSlots, setPaneSlots] = useState<string[]>([]);
@@ -64,7 +71,12 @@ const t = useT();
   const [isCredentialsModalOpen, setIsCredentialsModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isImportExportModalOpen, setIsImportExportModalOpen] = useState(false);
-  const [passphrasePrompt, setPassphrasePrompt] = useState<{ conn: Connection; allowDuplicate: boolean } | null>(null);
+  // `resolve`: restoring previous sessions waits for the answer (the passphrase or null = cancelled)
+  const [passphrasePrompt, setPassphrasePrompt] = useState<{
+    conn: Connection;
+    allowDuplicate: boolean;
+    resolve?: (passphrase: string | null) => void;
+  } | null>(null);
 
   // Load vault status on mount
   const checkStatus = useCallback(async () => {
@@ -175,7 +187,13 @@ const t = useT();
   }, []);
 
   // Connecting to a single session
-  const handleConnect = async (conn: Connection, allowDuplicate = false, customPassphrase?: string) => {
+  const handleConnect = async (
+    conn: Connection,
+    allowDuplicate = false,
+    customPassphrase?: string,
+    /** Called with the new tab's id as soon as the tab exists (before the connection is up). */
+    onCreated?: (sessionId: string) => void
+  ) => {
     // Check if key passphrase prompt is needed
     const cred = conn.credentialId ? credentials.find((c) => c.id === conn.credentialId) : undefined;
     const authType = effectiveSshAuthType(conn, cred);
@@ -236,6 +254,7 @@ const t = useT();
     setSessions((prev) => [...prev, initialSession]);
     setActiveSessionId(sessionId);
     setPaneSlots((prev) => [sessionId, ...prev.filter((id) => id !== sessionId)]);
+    onCreated?.(sessionId);
 
     // 2. Connect via Tauri backend
     try {
@@ -294,7 +313,7 @@ const t = useT();
   const handleReconnectSession = async (sessionId: string) => {
     const sess = sessions.find((s) => s.sessionId === sessionId);
     if (!sess) return;
-    const conn = connections.find((c) => c.id === sess.connectionId);
+    const conn = allConnections.find((c) => c.id === sess.connectionId);
     if (!conn) return;
 
     try {
@@ -311,7 +330,7 @@ const t = useT();
   const handleDuplicateSession = async (sessionId: string) => {
     const sess = sessions.find((s) => s.sessionId === sessionId);
     if (!sess) return;
-    const conn = connections.find((c) => c.id === sess.connectionId);
+    const conn = allConnections.find((c) => c.id === sess.connectionId);
     if (!conn) return;
 
     await handleConnect(conn, true);
@@ -430,7 +449,7 @@ const t = useT();
         const { sessions: open, unlocked } = exitStateRef.current;
         // Locked with nothing open (start / lock screen) – nothing to lose, close immediately
         if (!uiSettingsRef.current.confirmAppExit || (!unlocked && open === 0)) {
-          api.exitApp().catch(() => {});
+          flushWorkspaceRef.current().finally(() => api.exitApp().catch(() => {}));
           return;
         }
         setExitPrompt(true);
@@ -442,6 +461,152 @@ const t = useT();
       if (un) un();
     };
   }, []);
+
+  // --- Command palette / Quick Connect ----------------------------------------------------------
+  const handleQuickConnect = async (target: QuickTarget, auth: { sshAuthType: 'password' | 'agent'; password: string }) => {
+    const conn = await api.adhocConnectionCreate(target.protocol, target.host, target.port, target.username, auth.sshAuthType, auth.password);
+    setAdhocConnections((prev) => [...prev, conn]);
+    await handleConnect(conn, true);
+  };
+
+  // A quick connection is forgotten (with its password) when its last tab is closed
+  const usedAdhocRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (adhocConnections.length === 0) return;
+    const open = new Set(sessions.map((s) => s.connectionId));
+    const gone = adhocConnections.filter((c) => {
+      if (open.has(c.id)) {
+        usedAdhocRef.current.add(c.id);
+        return false;
+      }
+      return usedAdhocRef.current.has(c.id);
+    });
+    if (gone.length === 0) return;
+    gone.forEach((c) => {
+      usedAdhocRef.current.delete(c.id);
+      api.adhocConnectionForget(c.id).catch(() => {});
+    });
+    setAdhocConnections((prev) => prev.filter((c) => !gone.some((g) => g.id === c.id)));
+  }, [sessions, adhocConnections]);
+
+  // Locked with the Master Password: the backend forgot the quick connections
+  useEffect(() => {
+    if (vaultStatus && !vaultStatus.isUnlocked && !vaultStatus.isPinLocked) {
+      setAdhocConnections([]);
+      setPaletteOpen(false);
+    }
+    if (vaultStatus && !vaultStatus.isUnlocked) setPaletteOpen(false);
+  }, [vaultStatus]);
+
+
+  // --- Restore previous sessions (Settings → Confirmations) -----------------------------------
+  // The open tabs are written to the vault (debounced) while the option is on; after the first
+  // unlock of a run they are opened again. Only connections saved in the vault are kept.
+  const slotCountOf = (l: WorkspaceLayout) => (l === 'columns-3' ? 3 : l === 'grid-4' ? 4 : l === 'single' ? 1 : 2);
+  const restoringRef = useRef(false);
+  const restoreRequestedRef = useRef(false);
+  const [restorePending, setRestorePending] = useState(false);
+  const requestRestore = () => {
+    if (restoreRequestedRef.current) return;
+    restoreRequestedRef.current = true; // once per run – a later unlock keeps the running tabs
+    restoringRef.current = true; // no saving (of the still empty tab list) before the saved one is read
+    setRestorePending(true);
+  };
+
+  const currentWorkspace = (): SavedWorkspace | null => {
+    const known = new Set(connections.map((c) => c.id));
+    const tabs = sessions.filter((s) => known.has(s.connectionId));
+    if (tabs.length === 0) return null;
+    const index = (sessionId: string | null | undefined) => tabs.findIndex((s) => s.sessionId === sessionId);
+    return {
+      tabs: tabs.map((s) => s.connectionId),
+      layout,
+      panes: paneSlots.slice(0, slotCountOf(layout)).map(index),
+      active: index(activeSessionId) >= 0 ? index(activeSessionId) : null,
+    };
+  };
+  const workspaceRef = useRef<() => SavedWorkspace | null>(() => null);
+  workspaceRef.current = currentWorkspace;
+  const saveEnabled = !!uiSettings.restoreSessions && !!vaultStatus?.isUnlocked;
+  const saveEnabledRef = useRef(saveEnabled);
+  saveEnabledRef.current = saveEnabled;
+  // Saves now (application exit); never while the tabs are still being restored
+  const flushWorkspaceRef = useRef<() => Promise<void>>(async () => {});
+  flushWorkspaceRef.current = async () => {
+    if (!saveEnabledRef.current || restoringRef.current) return;
+    await api.setSavedWorkspace(workspaceRef.current()).catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!saveEnabled || restoringRef.current) return;
+    const timer = setTimeout(() => {
+      if (!restoringRef.current) api.setSavedWorkspace(workspaceRef.current()).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveEnabled, sessions.length, sessions.map((s) => s.sessionId).join(','), layout, paneSlots.join(','), activeSessionId]);
+
+  const handleConnectRef = useRef(handleConnect);
+  handleConnectRef.current = handleConnect;
+  const connectionsRef = useRef(connections);
+  connectionsRef.current = connections;
+  const credentialsRef = useRef(credentials);
+  credentialsRef.current = credentials;
+  const sessionsCountRef = useRef(0);
+  sessionsCountRef.current = sessions.length;
+
+  useEffect(() => {
+    if (!restorePending) return;
+    setRestorePending(false);
+    (async () => {
+      const ws = await api.getSavedWorkspace().catch(() => null);
+      if (!ws || ws.tabs.length === 0 || sessionsCountRef.current > 0) {
+        restoringRef.current = false;
+        return;
+      }
+      const ids: (string | null)[] = [];
+      try {
+        for (const connectionId of ws.tabs) {
+          const conn = connectionsRef.current.find((c) => c.id === connectionId);
+          if (!conn) {
+            ids.push(null);
+            continue;
+          }
+          // A key with "ask for the passphrase" – wait for the answer before the next tab
+          const cred = conn.credentialId ? credentialsRef.current.find((c) => c.id === conn.credentialId) : undefined;
+          const authType = effectiveSshAuthType(conn, cred);
+          const asks =
+            conn.protocol === 'ssh' &&
+            (authType === 'key' || authType === 'certificate') &&
+            (Boolean(conn.promptKeyPassphrase) || Boolean(cred?.promptKeyPassphrase));
+          let passphrase: string | undefined;
+          if (asks) {
+            const answer = await new Promise<string | null>((resolve) => setPassphrasePrompt({ conn, allowDuplicate: true, resolve }));
+            if (answer === null) {
+              ids.push(null);
+              continue;
+            }
+            passphrase = answer;
+          }
+          // Resolves when the tab exists (or the connection was given up, e.g. password prompt cancelled)
+          const id = await new Promise<string | null>((resolve) => {
+            handleConnectRef.current(conn, true, passphrase, resolve).then(() => resolve(null), () => resolve(null));
+          });
+          ids.push(id);
+        }
+        const open = ids.filter((id): id is string => !!id);
+        if (open.length === 0) return;
+        const visible = ws.panes.map((i) => (i >= 0 ? ids[i] : null)).filter((id): id is string => !!id);
+        const layoutToUse = open.length > 1 ? ws.layout : 'single';
+        setLayout(layoutToUse);
+        setPaneSlots([...visible, ...open.filter((id) => !visible.includes(id))]);
+        const active = ws.active != null ? ids[ws.active] : null;
+        setActiveSessionId(active ?? visible[0] ?? open[0]);
+      } finally {
+        restoringRef.current = false;
+      }
+    })();
+  }, [restorePending]);
 
   const confirmPendingClose = () => {
     const req = pendingClose;
@@ -571,10 +736,15 @@ const t = useT();
   };
 
   // Helper to keep paneSlots valid and synced with open sessions
+  // An effect of an earlier render can run its updater after newer updates were queued (tabs
+  // opened quickly one after another, e.g. restored sessions): a tab this render has not seen yet
+  // must not be dropped from the panes – only tabs that were open and are gone (closed).
+  const seenSessionIdsRef = useRef(new Set<string>());
   useEffect(() => {
     const openIds = sessions.map((s) => s.sessionId);
+    openIds.forEach((id) => seenSessionIdsRef.current.add(id));
     setPaneSlots((prev) => {
-      const valid = prev.filter((id) => openIds.includes(id));
+      const valid = prev.filter((id) => openIds.includes(id) || !seenSessionIdsRef.current.has(id));
       const missing = openIds.filter((id) => !valid.includes(id));
       return [...valid, ...missing];
     });
@@ -655,17 +825,21 @@ const t = useT();
     const onKeyDownCapture = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
       const key = e.key.toLowerCase();
-      if (key !== 'l' && key !== 'b') return;
+      if (key !== 'l' && key !== 'b' && key !== 'k') return;
       e.preventDefault();
       e.stopPropagation();
       if (e.repeat) return;
       if (key === 'l') handleLock();
+      else if (key === 'k') setPaletteOpen((o) => !o);
       else toggleSidebar();
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented && e.shiftKey) return; // handled above
       if (isSessionKeyTarget(e)) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
         e.preventDefault();
         handleLock();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
@@ -866,7 +1040,8 @@ const t = useT();
         }
         if (updated.isUnlocked) {
           await api.maximizeWindow();
-          loadData();
+          await loadData();
+          requestRestore();
           // Open sessions were kept running under the lock screen – refit and refocus them
           setTimeout(() => {
             window.dispatchEvent(new Event('resize'));
@@ -936,6 +1111,7 @@ const t = useT();
         onLock={handleLock}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenImportExport={() => setIsImportExportModalOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
       />
 
       {/* Main Split Layout: Left Menu (Sidebar) / Right Pane (Tabs + Workspace) */}
@@ -986,7 +1162,7 @@ const t = useT();
           {/* Active Tabs Bar */}
           <TabBar
             sessions={sessions}
-            connections={connections}
+            connections={allConnections}
             groups={groups}
             activeSessionId={activeSessionId}
             layout={layout}
@@ -1002,6 +1178,15 @@ const t = useT();
             onCloseSessionsToRight={handleCloseSessionsToRight}
             onCloseAll={handleCloseAllSessions}
             onReorderSessions={handleReorderSessions}
+            onSaveToVault={(sessionId) => {
+              const sess = sessions.find((s) => s.sessionId === sessionId);
+              const conn = sess && adhocConnections.find((c) => c.id === sess.connectionId);
+              if (!conn) return;
+              setEditingConn(null);
+              setDefaultGroupId(null);
+              setConnDraft({ name: conn.host, protocol: conn.protocol, host: conn.host, port: conn.port, username: conn.username, sshAuthType: conn.sshAuthType });
+              setIsConnModalOpen(true);
+            }}
           />
 
           {/* Active Workspace / Terminal / RDP Frame */}
@@ -1081,9 +1266,13 @@ const t = useT();
       {/* Connection Add/Edit Modal */}
       <ConnectionModal
         isOpen={isConnModalOpen}
-        onClose={() => setIsConnModalOpen(false)}
+        onClose={() => {
+          setIsConnModalOpen(false);
+          setConnDraft(null);
+        }}
         onSave={handleSaveConnection}
         editingConnection={editingConn}
+        draft={connDraft}
         groups={groups}
         credentials={credentials}
         defaultGroupId={defaultGroupId}
@@ -1134,12 +1323,16 @@ const t = useT();
         connection={passphrasePrompt?.conn || null}
         onConnect={(enteredPassphrase) => {
           if (passphrasePrompt) {
-            const { conn, allowDuplicate } = passphrasePrompt;
+            const { conn, allowDuplicate, resolve } = passphrasePrompt;
             setPassphrasePrompt(null);
-            handleConnect(conn, allowDuplicate, enteredPassphrase);
+            if (resolve) resolve(enteredPassphrase);
+            else handleConnect(conn, allowDuplicate, enteredPassphrase);
           }
         }}
-        onClose={() => setPassphrasePrompt(null)}
+        onClose={() => {
+          passphrasePrompt?.resolve?.(null);
+          setPassphrasePrompt(null);
+        }}
       />
     </div>
     {/* Outside the inert workspace and above every editor/menu, including portals. */}
@@ -1150,7 +1343,8 @@ const t = useT();
           setVaultStatus(updated);
           if (updated.isUnlocked) {
             await api.maximizeWindow();
-            loadData();
+            await loadData();
+            requestRestore();
           }
           setTimeout(() => {
             window.dispatchEvent(new CustomEvent('remoteflow-focus-terminal'));
@@ -1162,6 +1356,22 @@ const t = useT();
         }}
       />}
     </div>}
+    <CommandPalette
+      isOpen={paletteOpen && !!vaultStatus?.isUnlocked}
+      onClose={() => {
+        setPaletteOpen(false);
+        setTimeout(() => window.dispatchEvent(new CustomEvent('remoteflow-focus-terminal')), 50);
+      }}
+      connections={connections}
+      groups={groups}
+      sessions={sessions}
+      onConnect={(conn, newTab) => {
+        const open = !newTab && sessions.find((s) => s.connectionId === conn.id);
+        if (open) handleSelectSession(open.sessionId);
+        else handleConnect(conn, newTab);
+      }}
+      onQuickConnect={handleQuickConnect}
+    />
     <RdpCertificateDialog sessions={sessions} unlocked={!!vaultStatus?.isUnlocked} />
     <EmptyPasswordDialog unlocked={!!vaultStatus?.isUnlocked} onSaved={(saved) => {
       setConnections((prev) => prev.map((conn) => conn.id === saved.id ? saved : conn));
@@ -1179,7 +1389,8 @@ const t = useT();
           : t('Czy na pewno chcesz zamknąć program?')
       }
       confirmLabel={t('Zamknij program')}
-      onConfirm={() => {
+      onConfirm={async () => {
+        await flushWorkspaceRef.current();
         setExitPrompt(false);
         api.exitApp().catch(() => {});
       }}

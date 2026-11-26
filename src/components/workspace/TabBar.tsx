@@ -25,6 +25,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowRightToLine,
+  Save,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { Connection, Group, SessionInfo, WorkspaceLayout } from '../../types';
@@ -52,6 +53,8 @@ interface Props {
   onCloseSessionsToRight?: (sessionId: string, anchor?: DialogAnchor | null) => void;
   onCloseAll: (anchor?: DialogAnchor | null) => void;
   onReorderSessions?: (sourceSessionId: string, targetSessionId: string, position: 'left' | 'right') => void;
+  /** Quick connection (not in the vault): open the connection form pre-filled with it. */
+  onSaveToVault?: (sessionId: string) => void;
 }
 
 const getSlotCount = (layout: WorkspaceLayout): number => {
@@ -86,6 +89,7 @@ export const TabBar: React.FC<Props> = ({
   onCloseSessionsToRight,
   onCloseAll,
   onReorderSessions,
+  onSaveToVault,
 }) => {
   const t = useT();
   const [contextMenu, setContextMenu] = useState<{
@@ -710,6 +714,19 @@ export const TabBar: React.FC<Props> = ({
               <Copy className="h-3.5 w-3.5 text-slate-400" />
               <span>{t('Otwórz w nowej karcie')}</span>
             </button>
+
+            {onSaveToVault && contextMenu.session.connectionId.startsWith('adhoc-') && (
+              <button
+                onClick={() => {
+                  onSaveToVault(contextMenu.session.sessionId);
+                  setContextMenu(null);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-slate-800 hover:text-amber-300 transition-colors"
+              >
+                <Save className="h-3.5 w-3.5 text-amber-300" />
+                <span>{t('Zapisz połączenie w sejfie…')}</span>
+              </button>
+            )}
 
             {sessions.length > 1 && onReorderSessions && (() => {
               const id = contextMenu.session.sessionId;

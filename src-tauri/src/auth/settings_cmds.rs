@@ -1,6 +1,6 @@
 //! Settings kept in the vault: trusted hosts, interface settings, backups.
 
-use crate::vault::models::{KnownHostEntry, VaultStatus, BackupEntry, BackupSettings, UiSettings};
+use crate::vault::models::{KnownHostEntry, VaultStatus, BackupEntry, BackupSettings, SavedWorkspace, UiSettings};
 use crate::vault::backup;
 use crate::vault::storage::{load_vault, load_vault_verified, update_vault};
 use super::*;
@@ -53,7 +53,38 @@ pub fn vault_set_ui_settings(settings: UiSettings, state: tauri::State<'_, AuthS
         crate::vault::models::MAX_TERMINAL_SCROLLBACK,
     );
     update_vault(&key, |v| {
+        // Turning "Restore previous sessions" off also forgets the saved tabs
+        if !settings.restore_sessions {
+            v.metadata.saved_workspace = None;
+        }
         v.metadata.ui = settings;
+        Ok(())
+    })
+}
+
+/// Tabs saved for "Restore previous sessions" (None when the option is off or nothing is saved).
+#[tauri::command]
+pub fn vault_get_saved_workspace(state: tauri::State<'_, AuthState>) -> Result<Option<SavedWorkspace>, String> {
+    let mgr = lock_auth(&state)?;
+    let key = mgr.unlocked_key()?;
+    let data = load_vault_verified(key)?;
+    Ok(if data.metadata.ui.restore_sessions { data.metadata.saved_workspace } else { None })
+}
+
+/// Saves the open tabs (only while "Restore previous sessions" is on; an unchanged state is
+/// not written again).
+#[tauri::command]
+pub fn vault_set_saved_workspace(workspace: Option<SavedWorkspace>, state: tauri::State<'_, AuthState>) -> Result<(), String> {
+    let mgr = lock_auth(&state)?;
+    let key = mgr.unlocked_key()?.clone();
+    drop(mgr);
+    let workspace = workspace.map(SavedWorkspace::sanitized).filter(|w| !w.tabs.is_empty());
+    let current = load_vault_verified(&key)?;
+    if !current.metadata.ui.restore_sessions || current.metadata.saved_workspace == workspace {
+        return Ok(());
+    }
+    update_vault(&key, |v| {
+        v.metadata.saved_workspace = workspace;
         Ok(())
     })
 }
