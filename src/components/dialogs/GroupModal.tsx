@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Folder } from 'lucide-react';
 import { Group } from '../../types';
 import { useT } from '../../i18n';
+import { descendantGroupIds } from '../../utils/groupTree';
 
 interface Props {
   isOpen: boolean;
@@ -23,6 +24,8 @@ export const GroupModal: React.FC<Props> = ({
   const [name, setName] = useState('');
   const t = useT();
   const [parentId, setParentId] = useState<string | null>(null);
+  // The folder itself and its subfolders cannot be its parent (that would make a cycle)
+  const excluded = editingGroup ? new Set([editingGroup.id, ...descendantGroupIds(groups, editingGroup.id)]) : new Set<string>();
   const [color, setColor] = useState('#3b82f6');
   const [icon, setIcon] = useState('folder');
   const [saving, setSaving] = useState(false);
@@ -121,7 +124,7 @@ export const GroupModal: React.FC<Props> = ({
             >
               <option value="">{t('(Brak - folder główny)')}</option>
               {groups
-                .filter((g) => !editingGroup || g.id !== editingGroup.id)
+                .filter((g) => !excluded.has(g.id))
                 .map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.name}

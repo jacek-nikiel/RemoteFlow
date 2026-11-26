@@ -334,8 +334,15 @@ pub(crate) fn vault_init_impl(master_password: &str, state: &AuthState) -> Resul
 }
 
 #[tauri::command]
-pub fn vault_unlock_master(master_password: &str, accept_modified: Option<bool>, state: tauri::State<'_, AuthState>) -> Result<VaultStatus, String> {
-    vault_unlock_master_impl(master_password, accept_modified, &state)
+pub fn vault_unlock_master(
+    master_password: &str,
+    accept_modified: Option<bool>,
+    state: tauri::State<'_, AuthState>,
+    app: tauri::AppHandle,
+) -> Result<VaultStatus, String> {
+    let status = vault_unlock_master_impl(master_password, accept_modified, &state)?;
+    crate::session::rdp_embed::set_locked(&app, false);
+    Ok(status)
 }
 
 pub(crate) fn vault_unlock_master_impl(master_password: &str, accept_modified: Option<bool>, state: &AuthState) -> Result<VaultStatus, String> {
@@ -445,14 +452,16 @@ pub(crate) fn vault_unlock_master_impl(master_password: &str, accept_modified: O
 }
 
 #[tauri::command]
-pub fn vault_lock(state: tauri::State<'_, AuthState>) -> Result<(), String> {
+pub fn vault_lock(state: tauri::State<'_, AuthState>, app: tauri::AppHandle) -> Result<(), String> {
+    crate::session::rdp_embed::set_locked(&app, true);
     let mut mgr = lock_auth(&state)?;
     mgr.clear();
     Ok(())
 }
 
 #[tauri::command]
-pub fn vault_lock_to_pin(state: tauri::State<'_, AuthState>) -> Result<bool, String> {
+pub fn vault_lock_to_pin(state: tauri::State<'_, AuthState>, app: tauri::AppHandle) -> Result<bool, String> {
+    crate::session::rdp_embed::set_locked(&app, true);
     vault_lock_to_pin_impl(&state)
 }
 
@@ -494,8 +503,10 @@ pub fn lock_on_os_session_lock(state: &AuthState) -> Option<bool> {
 }
 
 #[tauri::command]
-pub fn vault_unlock_pin(pin: &str, state: tauri::State<'_, AuthState>) -> Result<VaultStatus, String> {
-    vault_unlock_pin_impl(pin, &state)
+pub fn vault_unlock_pin(pin: &str, state: tauri::State<'_, AuthState>, app: tauri::AppHandle) -> Result<VaultStatus, String> {
+    let status = vault_unlock_pin_impl(pin, &state)?;
+    crate::session::rdp_embed::set_locked(&app, false);
+    Ok(status)
 }
 
 pub(crate) fn vault_unlock_pin_impl(pin: &str, state: &AuthState) -> Result<VaultStatus, String> {

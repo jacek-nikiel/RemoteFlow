@@ -210,6 +210,15 @@ export interface RdpClipboardFileEntry {
   isDirectory: boolean;
   size: number;
   lastModified: number;
-  contentBase64?: string | null;
+  /** File on this computer (content read with api.readLocalFileBytes). */
+  localPath?: string | null;
+}
+
+export interface RdpClipboardRead {
+  entries: RdpClipboardFileEntry[];
+  /** Files too large for the remote clipboard (left out). */
+  skippedLarge: number;
+  /** Too many files – the rest was left out. */
+  truncated: boolean;
 }
 

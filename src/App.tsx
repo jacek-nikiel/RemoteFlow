@@ -25,6 +25,13 @@ import { PasswordPromptCancelled } from './utils/passwordPrompt';
 import { tn, useT } from './i18n';
 import { effectiveSshAuthType } from './utils/sshAuth';
 
+/** The key goes to a session: the SSH terminal (xterm.js) or the embedded RDP picture. */
+function isSessionKeyTarget(e: KeyboardEvent): boolean {
+  return e.composedPath().some(
+    (el) => el instanceof HTMLElement && (el.tagName === 'IRON-REMOTE-DESKTOP' || el.classList.contains('xterm'))
+  );
+}
+
 export const App: React.FC = () => {
 const t = useT();
   const [loading, setLoading] = useState(true);
@@ -639,9 +646,25 @@ const t = useT();
     });
   }, []);
 
-  // Keyboard shortcuts: Ctrl+L (Lock), F5 / Ctrl+R (Reload active connection), Ctrl+B (Toggle Sidebar)
+  // Keyboard shortcuts: Ctrl+L (Lock), F5 / Ctrl+R (Reload active connection), Ctrl+B (Toggle Sidebar).
+  // In a session (SSH terminal, RDP picture) these keys belong to the remote side – Ctrl+L clears
+  // the shell / goes to the address bar in Windows, Ctrl+R searches the history, Ctrl+B is the tmux
+  // prefix – so there they are ignored. Ctrl+Shift+L / Ctrl+Shift+B work everywhere, also in a
+  // session: they are caught before the session sees them.
   useEffect(() => {
+    const onKeyDownCapture = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key !== 'l' && key !== 'b') return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      if (key === 'l') handleLock();
+      else toggleSidebar();
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented && e.shiftKey) return; // handled above
+      if (isSessionKeyTarget(e)) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
         e.preventDefault();
         handleLock();
@@ -655,8 +678,12 @@ const t = useT();
         }
       }
     };
+    window.addEventListener('keydown', onKeyDownCapture, true);
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDownCapture, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, [handleLock, toggleSidebar, activeSessionId, handleReconnectSession]);
 
   // CRUD connections & groups
@@ -769,7 +796,11 @@ const t = useT();
 
   const deleteGroupNow = async (id: string) => {
     await api.deleteGroup(id);
-    setGroups((prev) => prev.filter((g) => g.id !== id));
+    // Subfolders move up to the parent of the deleted folder (as in the backend)
+    setGroups((prev) => {
+      const parentId = prev.find((g) => g.id === id)?.parentId ?? null;
+      return prev.filter((g) => g.id !== id).map((g) => (g.parentId === id ? { ...g, parentId } : g));
+    });
     setConnections((prev) =>
       prev.map((c) => (c.groupId === id ? { ...c, groupId: null } : c))
     );

@@ -9,6 +9,21 @@ The version is kept in three files that must match (checked by the `version_test
 Each release has a section for the same version (`## X.Y.Z – …`) in this file and in `CHANGELOG.pl.md`; both go into the
 release notes, and the in-app update notice shows the one in the interface language.
 
+## Unreleased
+
+### Fixed
+- **Folders:** a folder can no longer be placed inside its own subfolder (this used to hang the sidebar). Existing cycles are repaired when the vault opens. Deleting a folder moves its subfolders one level up instead of hiding them.
+- **Shortcuts in sessions:** Ctrl+L, Ctrl+B, Ctrl+R and F5 now reach the RDP session (Ctrl+L used to lock RemoteFlow). New **Ctrl+Shift+L** (lock) and **Ctrl+Shift+B** (sidebar) work everywhere, also inside a session.
+- **Credentials:** the form has the same key options as the connection form: key file path, ask for the passphrase at connect, SSH certificate (file or text) and SSH agent. Editing a credential no longer clears fields that were not shown.
+- **PIN:** 4–12 digits everywhere; the dots follow the typed digits; an empty PIN is refused with a message.
+- **Lock with FreeRDP:** embedded FreeRDP windows are hidden as soon as the vault locks (also on Windows lock / sleep), so nothing shows over the lock screen.
+- **RDP folder browser:** "up" and "Send this folder" work on Windows paths too.
+
+### Changed
+- **Dropping files works on Windows:** drag files or folders onto the SSH terminal or the RDP picture (native drops). In the terminal they go to the shell's current folder with the same transfer as the SFTP window (progress on the Files button, Stop in the window). Ctrl+V of copied files in the terminal does the same.
+- **Nothing is skipped:** folders like `.git`, `node_modules` or `target` are sent too – for example to a build server.
+- **Faster and lighter RDP file staging:** files are copied by path and sent as raw bytes, without Base64. Limits: 5000 files, 1 GB per file; you get a message about skipped files.
+
 ## 1.17.0 – SSH tunnels list, background SFTP transfers, sharp RDP Auto picture, security hardening
 - **Embedded RDP client updated** to IronRDP 0.8 / iron-remote-desktop 0.12.
 - **RDP picture in 32-bit color.** The embedded client now asks for the color depth of the connection settings (32-bit); IronRDP's own default was 16-bit, which spoiled anti-aliased text (ClearType) on colored backgrounds. The RDP statistics panel shows the graphics mode and color depth.

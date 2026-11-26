@@ -22,7 +22,7 @@ use session::{
     local_list_dir, open_shared_folder, pick_local_folder, pick_private_key_file, save_file_as, pick_ssh_certificate_file,
     read_local_paths_for_rdp_clipboard, save_dropped_file_to_shared, session_close,
     session_connect, session_launch_external_rdp, session_rdp_password, session_resize,
-    session_send_input, sftp_list, sftp_upload_file, sftp_upload_paths, sftp_transfer_cancel, SessionManager,
+    session_send_input, sftp_list, sftp_transfer_cancel, SessionManager,
 };
 use session::clipstage::{clipboard_sequence, rdp_clip_stage_begin, rdp_clip_stage_commit, rdp_clip_stage_dir, rdp_clip_stage_file};
 use vault::mremoteng::mremoteng_unlock;
@@ -108,8 +108,6 @@ pub fn run() {
             session::rdp_embed::rdp_embed_release_focus,
             display::display_set_rdp_freerdp_embedded,
             sftp_list,
-            sftp_upload_file,
-            sftp_upload_paths,
             sftp_transfer_cancel,
             open_shared_folder,
             save_dropped_file_to_shared,
@@ -123,6 +121,7 @@ pub fn run() {
             pick_private_key_file,
             pick_ssh_certificate_file,
             read_local_paths_for_rdp_clipboard,
+            session::read_local_file_bytes,
             app_exit,
             install::app_install_info,
             install::portable_update_check,

@@ -32,6 +32,7 @@ import { api } from '../../services/api';
 import { BackupEntry, BackupSettings, KnownHostEntry, UiSettings, VaultStatus } from '../../types';
 import { ConfirmDialog } from './ConfirmDialog';
 import { locale, tn, useT } from '../../i18n';
+import { MAX_PIN_LEN, MIN_PIN_LEN } from '../../utils/pin';
 import { LanguageSegmented } from '../../i18n/LanguageSwitcher';
 import { LinuxRdpClientSetting, LinuxRenderingSetting, TerminalDarkToggle, ThemeSegmented } from '../../theme/ThemeSwitcher';
 
@@ -156,9 +157,13 @@ export const SettingsModal: React.FC<Props> = ({
     setSuccessMsg(null);
 
     // Validate PIN if enabling or changing
+    if (pinEnabled && !status.pinEnabled && !pinCode) {
+      setError(t('Wpisz kod PIN, aby włączyć blokadę PIN-em'));
+      return;
+    }
     if (pinEnabled && pinCode) {
-      if (pinCode.length < 4) {
-        setError(t('PIN musi mieć co najmniej 4 cyfry'));
+      if (pinCode.length < MIN_PIN_LEN || pinCode.length > MAX_PIN_LEN) {
+        setError(t('PIN musi mieć od {min} do {max} cyfr', { min: MIN_PIN_LEN, max: MAX_PIN_LEN }));
         return;
       }
       if (pinCode !== confirmPinCode) {
@@ -450,11 +455,11 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-300">
-                        {status.pinEnabled ? t('Zmień kod PIN') : t('Ustaw kod PIN (4-8 cyfr)')}
+                        {status.pinEnabled ? t('Zmień kod PIN') : t('Ustaw kod PIN ({min}-{max} cyfr)', { min: MIN_PIN_LEN, max: MAX_PIN_LEN })}
                       </label>
                       <input
                         type="password"
-                        maxLength={8}
+                        maxLength={MAX_PIN_LEN}
                         value={pinCode}
                         onChange={(e) => setPinCode(e.target.value.replace(/\D/g, ''))}
                         placeholder={t('Wpisz PIN...')}
@@ -468,7 +473,7 @@ export const SettingsModal: React.FC<Props> = ({
                       </label>
                       <input
                         type="password"
-                        maxLength={8}
+                        maxLength={MAX_PIN_LEN}
                         value={confirmPinCode}
                         onChange={(e) => setConfirmPinCode(e.target.value.replace(/\D/g, ''))}
                         placeholder={t('Powtórz PIN...')}

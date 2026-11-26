@@ -22,6 +22,11 @@ fn staging_root() -> PathBuf {
     base.join("RemoteFlow").join("rdp-clipboard")
 }
 
+/// Percent-decoding of a header value (also used by the RDP exchange commands).
+pub(crate) fn percent_decode_pub(s: &str) -> Result<String, String> {
+    percent_decode(s)
+}
+
 fn percent_decode(s: &str) -> Result<String, String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());

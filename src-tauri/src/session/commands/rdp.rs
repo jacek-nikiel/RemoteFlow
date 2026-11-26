@@ -126,18 +126,17 @@ pub fn open_shared_folder(target_dir: Option<String>) -> Result<String, String> 
     Ok(path_str)
 }
 
-#[tauri::command]
-pub async fn save_dropped_file_to_shared(
+async fn save_to_shared(
     filename: String,
-    content_base64: String,
+    data: Vec<u8>,
     connection_id: Option<String>,
-    auth_state: tauri::State<'_, AuthState>,
+    auth_state: &AuthState,
 ) -> Result<String, String> {
     // The target folder is the connection's exchange folder from the vault, never a path from the UI
-    let access = localfs::local_access(&auth_state)?;
+    let access = localfs::local_access(auth_state)?;
     let target_dir = match connection_id.filter(|id| !id.is_empty()) {
         Some(id) => {
-            let mgr = lock_auth(&auth_state)?;
+            let mgr = lock_auth(auth_state)?;
             let key = mgr.unlocked_key()?;
             load_vault_verified(key)?
                 .connections
@@ -148,11 +147,6 @@ pub async fn save_dropped_file_to_shared(
         None => None,
     };
     tokio::task::spawn_blocking(move || {
-        use base64::Engine;
-        let data = base64::engine::general_purpose::STANDARD
-            .decode(&content_base64)
-            .map_err(|e| tr!("Błąd dekodowania pliku: {}", "File decoding error: {}", e))?;
-
         let save_dir = if let Some(dir) = target_dir.filter(|s| !s.trim().is_empty()) {
             std::path::PathBuf::from(dir)
         } else {
@@ -202,18 +196,40 @@ pub struct RdpClipboardFileEntry {
     pub size: u64,
     #[serde(rename = "lastModified")]
     pub last_modified: u64,
-    #[serde(rename = "contentBase64")]
-    pub content_base64: Option<String>,
+    /// File on this computer – its content is read with `read_local_file_bytes` (raw bytes,
+    /// not Base64 in JSON as before).
+    #[serde(rename = "localPath")]
+    pub local_path: Option<String>,
 }
+
+/// Files and folders to put on the remote clipboard, plus what was left out (reported to the user
+/// instead of being skipped silently).
+#[derive(Serialize)]
+pub struct RdpClipboardRead {
+    pub entries: Vec<RdpClipboardFileEntry>,
+    /// Files larger than MAX_CLIPBOARD_FILE (the remote clipboard keeps each file in memory)
+    #[serde(rename = "skippedLarge")]
+    pub skipped_large: u32,
+    /// More than MAX_CLIPBOARD_ENTRIES files and folders – the rest was not added
+    pub truncated: bool,
+}
+
+/// Limits of the remote clipboard (files are held in memory by the embedded client until pasted).
+const MAX_CLIPBOARD_ENTRIES: usize = 5000;
+const MAX_CLIPBOARD_FILE: u64 = 1024 * 1024 * 1024;
 
 fn collect_rdp_clipboard_entries(
     local: &std::path::Path,
     rel_parent_win: Option<String>,
     shared_target_dir: &std::path::Path,
-    out: &mut Vec<RdpClipboardFileEntry>,
+    out: &mut RdpClipboardRead,
     depth: u32,
 ) -> Result<(), String> {
-    if out.len() >= 500 || depth > 16 {
+    if out.entries.len() >= MAX_CLIPBOARD_ENTRIES {
+        out.truncated = true;
+        return Ok(());
+    }
+    if depth > 32 {
         return Ok(());
     }
 
@@ -231,17 +247,8 @@ fn collect_rdp_clipboard_entries(
         .unwrap_or("item")
         .to_string();
 
-    if depth > 0
-        && (name == ".cache"
-            || name == ".local"
-            || name == ".cargo"
-            || name == ".rustup"
-            || name == "node_modules"
-            || name == "target"
-            || name == ".git")
-    {
-        return Ok(());
-    }
+    // Everything is sent – also .git, node_modules, target… (they were skipped silently before;
+    // a build server may need exactly them).
 
     let last_modified = sym_meta
         .modified()
@@ -254,13 +261,13 @@ fn collect_rdp_clipboard_entries(
 
     if sym_meta.is_dir() {
         let _ = std::fs::create_dir_all(&shared_dest);
-        out.push(RdpClipboardFileEntry {
+        out.entries.push(RdpClipboardFileEntry {
             name: name.clone(),
             path: rel_parent_win.clone(),
             is_directory: true,
             size: 0,
             last_modified,
-            content_base64: None,
+            local_path: None,
         });
 
         let next_parent = match rel_parent_win {
@@ -280,22 +287,19 @@ fn collect_rdp_clipboard_entries(
             }
         }
     } else if sym_meta.is_file() {
-        // Cap individual file size for in-memory base64 clipboard staging to 50 MB
-        if sym_meta.len() > 50 * 1024 * 1024 {
+        if sym_meta.len() > MAX_CLIPBOARD_FILE {
+            out.skipped_large += 1;
             return Ok(());
         }
-        use base64::Engine;
-        let data = std::fs::read(local)
-            .map_err(|e| tr!("Błąd odczytu pliku '{}': {}", "Error reading file '{}': {}", local.display(), e))?;
-        let _ = std::fs::write(&shared_dest, &data);
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-        out.push(RdpClipboardFileEntry {
+        // Copy for the FreeRDP drive (\\tsclient\RemoteFlow) – streamed, not read into memory
+        let _ = std::fs::copy(local, &shared_dest);
+        out.entries.push(RdpClipboardFileEntry {
             name,
             path: rel_parent_win,
             is_directory: false,
-            size: data.len() as u64,
+            size: sym_meta.len(),
             last_modified,
-            content_base64: Some(b64),
+            local_path: Some(local.to_string_lossy().to_string()),
         });
     }
 
@@ -327,7 +331,7 @@ pub(crate) fn shared_exchange_dir() -> Result<std::path::PathBuf, String> {
 pub async fn read_local_paths_for_rdp_clipboard(
     local_paths: Vec<String>,
     auth_state: tauri::State<'_, AuthState>,
-) -> Result<Vec<RdpClipboardFileEntry>, String> {
+) -> Result<RdpClipboardRead, String> {
     let access = localfs::local_access(&auth_state)?;
     for p in &local_paths {
         access.check(p)?;
@@ -338,7 +342,7 @@ pub async fn read_local_paths_for_rdp_clipboard(
             .map(|h| h.to_string_lossy().trim_end_matches('/').to_string())
             .unwrap_or_default();
 
-        let mut result = Vec::new();
+        let mut result = RdpClipboardRead { entries: Vec::new(), skipped_large: 0, truncated: false };
         for lp in local_paths {
             let clean = lp.trim_end_matches('/');
             if clean.is_empty() || clean == "/" {
@@ -359,4 +363,35 @@ pub async fn read_local_paths_for_rdp_clipboard(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Content of a local file as raw bytes (for the remote clipboard of the embedded RDP client).
+/// The program's own data cannot be read (local file guard).
+#[tauri::command]
+pub async fn read_local_file_bytes(path: String, auth_state: tauri::State<'_, AuthState>) -> Result<tauri::ipc::Response, String> {
+    let access = localfs::local_access(&auth_state)?;
+    access.check(&path)?;
+    let meta = std::fs::metadata(&path).map_err(|e| tr!("Błąd odczytu pliku '{}': {}", "Error reading file '{}': {}", path, e))?;
+    if !meta.is_file() || meta.len() > MAX_CLIPBOARD_FILE {
+        return Err(tr!("To nie jest plik albo jest za duży: {}", "Not a file or too large: {}", path));
+    }
+    let data = tokio::task::spawn_blocking(move || std::fs::read(&path).map_err(|e| tr!("Błąd odczytu pliku '{}': {}", "Error reading file '{}': {}", path, e)))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(data))
+}
+
+/// Saves a file received from the RDP session (raw bytes in the request body) into the
+/// connection's exchange folder (or the downloads folder). Headers: `x-filename` (relative path,
+/// percent-encoded), `x-connection-id` (optional).
+#[tauri::command]
+pub async fn save_dropped_file_to_shared(request: tauri::ipc::Request<'_>, auth_state: tauri::State<'_, AuthState>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(tr!("Oczekiwano binarnej zawartości pliku", "Binary file content expected").to_string());
+    };
+    let header = |name: &str| -> Option<String> {
+        request.headers().get(name).and_then(|v| v.to_str().ok()).and_then(|v| crate::session::clipstage::percent_decode_pub(v).ok())
+    };
+    let filename = header("x-filename").ok_or_else(|| tr!("Brak nagłówka {}", "Missing header {}", "x-filename"))?;
+    save_to_shared(filename, bytes.clone(), header("x-connection-id"), &auth_state).await
 }

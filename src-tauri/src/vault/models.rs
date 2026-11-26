@@ -369,3 +369,78 @@ mod tests {
         assert!(serde_json::to_string(&custom).unwrap().contains("\"terminalScrollback\":50000"));
     }
 }
+
+/// Folder tree checks. A folder whose parent chain leads back to itself (A → B → A) is never
+/// shown: none of its folders is a root and its connections are not "without a folder" either.
+pub mod group_tree {
+    use super::Group;
+    use std::collections::{HashMap, HashSet};
+
+    /// `true` when giving folder `id` the parent `parent` would make a cycle (also `parent == id`).
+    pub fn parent_creates_cycle(groups: &[Group], id: &str, parent: Option<&str>) -> bool {
+        let parents: HashMap<&str, Option<&str>> =
+            groups.iter().map(|g| (g.id.as_str(), g.parent_id.as_deref())).collect();
+        let mut seen = HashSet::new();
+        let mut current = parent;
+        while let Some(p) = current {
+            if p == id {
+                return true;
+            }
+            if !seen.insert(p) {
+                return false; // an older cycle above – not created by this change
+            }
+            current = parents.get(p).copied().flatten();
+        }
+        false
+    }
+
+    /// Breaks every cycle by moving one folder of it to the top level. Returns whether anything changed.
+    pub fn break_cycles(groups: &mut [Group]) -> bool {
+        let mut changed = false;
+        for i in 0..groups.len() {
+            let parents: HashMap<String, Option<String>> =
+                groups.iter().map(|g| (g.id.clone(), g.parent_id.clone())).collect();
+            let id = groups[i].id.clone();
+            let mut seen = HashSet::new();
+            let mut current = groups[i].parent_id.clone();
+            while let Some(p) = current {
+                if p == id {
+                    groups[i].parent_id = None;
+                    changed = true;
+                    break;
+                }
+                if !seen.insert(p.clone()) {
+                    break; // this folder only hangs below a cycle; the cycle's own folders fix it
+                }
+                current = parents.get(&p).cloned().flatten();
+            }
+        }
+        changed
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn g(id: &str, parent: Option<&str>) -> Group {
+            Group { id: id.into(), name: id.into(), parent_id: parent.map(Into::into), icon: None, color: None }
+        }
+
+        #[test]
+        fn detects_and_breaks_cycles() {
+            let groups = vec![g("a", None), g("b", Some("a")), g("c", Some("b"))];
+            assert!(parent_creates_cycle(&groups, "a", Some("c")));
+            assert!(parent_creates_cycle(&groups, "a", Some("a")));
+            assert!(!parent_creates_cycle(&groups, "c", Some("a")));
+            assert!(!parent_creates_cycle(&groups, "a", None));
+
+            let mut cyclic = vec![g("a", Some("b")), g("b", Some("a")), g("c", Some("b")), g("d", Some("d"))];
+            assert!(break_cycles(&mut cyclic));
+            assert_eq!(cyclic[0].parent_id, None); // a moved to the top
+            assert_eq!(cyclic[1].parent_id.as_deref(), Some("a"));
+            assert_eq!(cyclic[2].parent_id.as_deref(), Some("b"));
+            assert_eq!(cyclic[3].parent_id, None);
+            assert!(!break_cycles(&mut cyclic));
+        }
+    }
+}

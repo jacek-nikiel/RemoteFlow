@@ -14,6 +14,7 @@ import { api } from '../../services/api';
 import { Credential, SshAuthType } from '../../types';
 import { anchorFromElement, ConfirmDialog, DialogAnchor } from './ConfirmDialog';
 import { useT } from '../../i18n';
+import { SshKeyFields } from './SshKeyFields';
 
 interface Props {
   isOpen: boolean;
@@ -40,6 +41,12 @@ export const CredentialsModal: React.FC<Props> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [privateKey, setPrivateKey] = useState('');
   const [passphrase, setPassphrase] = useState('');
+  const [keyInputMode, setKeyInputMode] = useState<'file' | 'text'>('text');
+  const [keyFilePath, setKeyFilePath] = useState('');
+  const [promptKeyPassphrase, setPromptKeyPassphrase] = useState(false);
+  const [certificateContent, setCertificateContent] = useState('');
+  const [certInputMode, setCertInputMode] = useState<'file' | 'text'>('file');
+  const [certFilePath, setCertFilePath] = useState('');
   const [saving, setSaving] = useState(false);
   const [revealingId, setRevealingId] = useState<string | null>(null);
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, string>>({});
@@ -55,6 +62,12 @@ export const CredentialsModal: React.FC<Props> = ({
     setShowPassword(false);
     setPrivateKey('');
     setPassphrase('');
+    setKeyInputMode('file');
+    setKeyFilePath('');
+    setPromptKeyPassphrase(false);
+    setCertificateContent('');
+    setCertInputMode('file');
+    setCertFilePath('');
     setError(null);
     setIsFormOpen(true);
   };
@@ -68,6 +81,12 @@ export const CredentialsModal: React.FC<Props> = ({
     setShowPassword(false);
     setPrivateKey('');
     setPassphrase('');
+    setKeyInputMode(cred.keyFilePath ? 'file' : 'text');
+    setKeyFilePath(cred.keyFilePath || '');
+    setPromptKeyPassphrase(Boolean(cred.promptKeyPassphrase));
+    setCertificateContent(cred.certificateContent || '');
+    setCertInputMode(cred.certificateFilePath || !cred.certificateContent ? 'file' : 'text');
+    setCertFilePath(cred.certificateFilePath || '');
     setError(null);
     setIsFormOpen(true);
   };
@@ -103,15 +122,21 @@ export const CredentialsModal: React.FC<Props> = ({
     setSaving(true);
     setError(null);
     try {
+      // Everything the form does not show (fields added later, data from an import) is kept
       const cred: Credential = {
+        ...(editingCred ?? {}),
         id: editingCred ? editingCred.id : 'cred-' + Math.random().toString(36).substring(2, 9),
         name: name.trim(),
         username: username.trim(),
         authType,
         passwordEncrypted: editingCred ? editingCred.passwordEncrypted : undefined,
         privateKeyEncrypted: editingCred ? editingCred.privateKeyEncrypted : undefined,
-        privateKeyPassphraseEncrypted: editingCred ? editingCred.privateKeyPassphraseEncrypted : undefined,
-        certificateContent: undefined,
+        privateKeyPassphraseEncrypted: promptKeyPassphrase ? undefined : editingCred?.privateKeyPassphraseEncrypted,
+        certificateContent: certificateContent.trim() || undefined,
+        // A file (read at every connection) applies only when "file" is selected – as in the connection editor
+        certificateFilePath: (certInputMode === 'file' && certFilePath.trim()) || undefined,
+        keyFilePath: (keyInputMode === 'file' && keyFilePath.trim()) || undefined,
+        promptKeyPassphrase: promptKeyPassphrase,
         createdAt: editingCred ? editingCred.createdAt : new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -120,7 +145,7 @@ export const CredentialsModal: React.FC<Props> = ({
         cred,
         password || undefined,
         privateKey || undefined,
-        passphrase || undefined
+        promptKeyPassphrase ? '' : passphrase || undefined
       );
 
       await onCredentialsChanged();
@@ -212,7 +237,7 @@ export const CredentialsModal: React.FC<Props> = ({
                               {cred.name}
                             </div>
                             <div className="text-[11px] text-slate-400 font-mono">
-                              {t('Użytkownik:')} <span className="text-slate-300">{cred.username || t('(brak)')}</span> | {t('Typ:')} {cred.authType}
+                              {t('Użytkownik:')} <span className="text-slate-300">{cred.username || t('(brak)')}</span> | {t('Typ:')} {cred.authType === 'password' ? t('Hasło') : cred.authType === 'key' ? t('Klucz prywatny') : cred.authType === 'certificate' ? t('Certyfikat SSH CA') : t('Agent SSH')}
                             </div>
                             {isRevealed && (
                               <div className="mt-1 text-[11px] font-mono text-cyan-300 bg-cyan-950/50 px-2 py-0.5 rounded border border-cyan-800/40">
@@ -293,7 +318,7 @@ export const CredentialsModal: React.FC<Props> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300">
                     {t('Nazwa użytkownika (Login)')}
@@ -307,20 +332,6 @@ export const CredentialsModal: React.FC<Props> = ({
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300">
-                    {t('Metoda autentykacji')}
-                  </label>
-                  <select
-                    value={authType}
-                    onChange={(e) => setAuthType(e.target.value as SshAuthType)}
-                    className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-white focus:border-cyan-500 focus:outline-none"
-                  >
-                    <option value="password">{t('Hasło')}</option>
-                    <option value="key">{t('Klucz prywatny SSH')}</option>
-                    <option value="certificate">{t('Certyfikat SSH CA')}</option>
-                  </select>
-                </div>
               </div>
 
               <div>
@@ -349,34 +360,28 @@ export const CredentialsModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              {authType !== 'password' && (
-                <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-300">
-                      {t('Klucz prywatny SSH')}
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={privateKey}
-                      onChange={(e) => setPrivateKey(e.target.value)}
-                      placeholder={t('-----BEGIN OPENSSH PRIVATE KEY-----...')}
-                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 font-mono text-[11px] text-white px-3 py-2 focus:border-cyan-500 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-300">
-                      {t('Hasło klucza (Passphrase)')}
-                    </label>
-                    <input
-                      type="password"
-                      value={passphrase}
-                      onChange={(e) => setPassphrase(e.target.value)}
-                      placeholder={t('Opcjonalny passphrase...')}
-                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 text-xs text-white px-3 py-2 focus:border-cyan-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              )}
+              <SshKeyFields
+                authType={authType}
+                setAuthType={setAuthType}
+                privateKey={privateKey}
+                setPrivateKey={setPrivateKey}
+                keyInputMode={keyInputMode}
+                setKeyInputMode={setKeyInputMode}
+                keyFilePath={keyFilePath}
+                setKeyFilePath={setKeyFilePath}
+                passphrase={passphrase}
+                setPassphrase={setPassphrase}
+                promptKeyPassphrase={promptKeyPassphrase}
+                setPromptKeyPassphrase={setPromptKeyPassphrase}
+                hasStoredPassphrase={Boolean(editingCred?.privateKeyPassphraseEncrypted)}
+                certificateContent={certificateContent}
+                setCertificateContent={setCertificateContent}
+                certInputMode={certInputMode}
+                setCertInputMode={setCertInputMode}
+                certFilePath={certFilePath}
+                setCertFilePath={setCertFilePath}
+                setError={setError}
+              />
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
                 <button

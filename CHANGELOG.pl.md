@@ -9,6 +9,21 @@ Wersja jest zapisana w trzech plikach, które muszą być zgodne (pilnuje tego t
 Każde wydanie ma sekcję dla tej samej wersji (`## X.Y.Z – …`) w tym pliku i w angielskim `CHANGELOG.md`; obie trafiają do opisu
 wydania, a okienko aktualizacji w programie pokazuje tę w języku interfejsu.
 
+## Niewydane (trafi do kolejnej wersji)
+
+### Poprawione
+- **Foldery:** folderu nie da się już umieścić we własnym podfolderze (wcześniej zawieszało to pasek boczny). Istniejące pętle są naprawiane przy otwarciu sejfu. Usunięcie folderu przenosi jego podfoldery poziom wyżej zamiast je ukrywać.
+- **Skróty w sesjach:** Ctrl+L, Ctrl+B, Ctrl+R i F5 trafiają teraz do sesji RDP (Ctrl+L blokował RemoteFlow). Nowe **Ctrl+Shift+L** (blokada) i **Ctrl+Shift+B** (pasek boczny) działają wszędzie, także w sesji.
+- **Poświadczenia:** formularz ma te same opcje kluczy co formularz połączenia: ścieżka do pliku klucza, pytanie o hasło klucza przy łączeniu, certyfikat SSH (plik lub tekst) i agent SSH. Edycja poświadczenia nie czyści już pól, których nie było widać.
+- **PIN:** wszędzie 4–12 cyfr; kropki pokazują wpisane cyfry; pusty PIN jest odrzucany z komunikatem.
+- **Blokada z FreeRDP:** wbudowane okna FreeRDP są ukrywane od razu po zablokowaniu sejfu (także przy blokadzie Windows / uśpieniu), więc nic nie wystaje nad ekran blokady.
+- **Przeglądarka folderów RDP:** „w górę” i „Wyślij ten katalog” działają także na ścieżkach Windows.
+
+### Zmienione
+- **Przeciąganie plików działa w Windows:** przeciągnij pliki lub katalogi na terminal SSH albo obraz RDP. W terminalu trafiają do bieżącego katalogu powłoki tym samym transferem co w oknie SFTP (postęp na przycisku Pliki, Stop w oknie). Ctrl+V skopiowanych plików w terminalu działa tak samo.
+- **Nic nie jest pomijane:** katalogi takie jak `.git`, `node_modules` czy `target` też są wysyłane – np. na serwer do kompilacji.
+- **Szybsze i lżejsze przygotowanie plików dla RDP:** pliki są kopiowane po ścieżce i przesyłane jako surowe bajty, bez Base64. Limity: 5000 plików, 1 GB na plik; o pominiętych plikach dostajesz komunikat.
+
 ## 1.17.0 – lista tuneli SSH, transfery SFTP w tle, ostry obraz RDP w trybie Auto, utwardzenie bezpieczeństwa
 - **Zaktualizowany wbudowany klient RDP** – IronRDP 0.8 / iron-remote-desktop 0.12.
 - **Obraz RDP w kolorze 32-bitowym.** Wbudowany klient prosi teraz o głębię kolorów z ustawień połączenia (32 bity); domyślnie IronRDP prosił o 16 bitów, co psuło wygładzany tekst (ClearType) na kolorowym tle. Panel statystyk RDP pokazuje tryb grafiki i głębię kolorów.

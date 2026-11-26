@@ -221,6 +221,7 @@ pub fn start_monitor(app: AppHandle) {
                 // 1. Inactivity auto-lock (Ustawienia → Automatyczna blokada przy bezczynności)
                 if let Some(pin_locked) = lock_if_idle(&state) {
                     eprintln!("[RemoteFlow] Brak aktywności – sejf zablokowany");
+                    crate::session::rdp_embed::set_locked(&app, true);
                     let _ = app.emit("vault-auto-locked", pin_locked);
                 }
 
@@ -237,7 +238,8 @@ pub fn start_monitor(app: AppHandle) {
                         if locked && !was_locked && auto_lock_enabled() {
                             if let Some(pin_locked) = lock_on_os_session_lock(&state) {
                                 eprintln!("[RemoteFlow] Wykryto blokadę systemu – sejf zablokowany");
-                                let _ = app.emit("vault-auto-locked", pin_locked);
+                                crate::session::rdp_embed::set_locked(&app, true);
+                    let _ = app.emit("vault-auto-locked", pin_locked);
                             }
                         }
                         was_locked = locked;

@@ -360,44 +360,6 @@ pub async fn sftp_list(
 }
 
 #[tauri::command]
-pub async fn sftp_upload_file(
-    connection_id: String,
-    remote_dir: String,
-    filename: String,
-    content_base64: String,
-    auth_state: tauri::State<'_, AuthState>,
-    app: tauri::AppHandle,
-) -> Result<u64, String> {
-    let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
-    tokio::task::spawn_blocking(move || {
-        sftp::sftp_upload_base64_file(&config, &remote_dir, &filename, &content_base64)
-    })
-    .await
-    .map_err(|e| tr!("Błąd zadania przesyłania pliku SFTP: {}", "SFTP file upload task error: {}", e))?
-}
-
-#[tauri::command]
-pub async fn sftp_upload_paths(
-    connection_id: String,
-    remote_dir: String,
-    local_paths: Vec<String>,
-    auth_state: tauri::State<'_, AuthState>,
-    app: tauri::AppHandle,
-) -> Result<u32, String> {
-    let config = resolve_connection_ssh_config(&connection_id, &auth_state, &app)?;
-    let access = localfs::local_access(&auth_state)?;
-    for p in &local_paths {
-        access.check(p)?;
-    }
-    tokio::task::spawn_blocking(move || {
-        sftp::sftp_upload_local_paths(&config, local_paths, &remote_dir)
-    })
-    .await
-    .map_err(|e| tr!("Błąd zadania przesyłania katalogu SFTP: {}", "SFTP folder upload task error: {}", e))?
-}
-
-
-#[tauri::command]
 pub async fn local_list_dir(local_path: String, auth_state: tauri::State<'_, AuthState>) -> Result<SftpListResponse, String> {
     localfs::require_unlocked(&auth_state)?;
     tokio::task::spawn_blocking(move || {

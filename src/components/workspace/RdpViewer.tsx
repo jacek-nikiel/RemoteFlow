@@ -13,6 +13,7 @@ import { noteRdpColorDepth, rdpColorDepth } from './rdp/graphicsMode';
 import { SessionInfo } from '../../types';
 import { api, isTauri, isWindowsHost } from '../../services/api';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useT } from '../../i18n';
 import { rdpPixelRatio, rdpScaleFactor, screenScale } from '../../utils/rdpDisplay';
 import { RdpStatsPanel } from './RdpStatsPanel';
@@ -97,6 +98,7 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
     remoteClipboardText,
     setRemoteClipboardText,
     isDragOver,
+    setIsDragOver,
     isSavingFiles,
     stagedUploadNames,
     setStagedUploadNames,
@@ -782,6 +784,39 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
     const id = setInterval(refreshCanvasStyle, 1000);
     return () => clearInterval(id);
   }, [isActive, status, refreshCanvasStyle]);
+
+  // Files dropped from the system file manager arrive natively (Tauri) – HTML drop events never
+  // carry them in the app window, so dropping on the RDP picture did nothing before. They are put
+  // on the remote clipboard (paste with Ctrl+V in Windows), read by path, not through Base64.
+  const dropReadyRef = useRef(false);
+  dropReadyRef.current = status === 'connected' && clipboardAllowed && isActive;
+  useEffect(() => {
+    if (!isTauri()) return;
+    const inViewer = (pos: { x: number; y: number }) => {
+      const area = containerRef.current;
+      if (!area || !dropReadyRef.current) return false;
+      const el = document.elementFromPoint(pos.x / window.devicePixelRatio, pos.y / window.devicePixelRatio);
+      return !!el && area.contains(el);
+    };
+    let un: (() => void) | null = null;
+    let cancelled = false;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === 'enter' || p.type === 'over') setIsDragOver(inViewer(p.position));
+        else if (p.type === 'leave') setIsDragOver(false);
+        else if (p.type === 'drop') {
+          setIsDragOver(false);
+          if (inViewer(p.position) && p.paths.length > 0) void stageLocalPathsToRdpClipboard(p.paths);
+        }
+      })
+      .then((fn) => (cancelled ? fn() : (un = fn)))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (un) un();
+    };
+  }, [setIsDragOver, stageLocalPathsToRdpClipboard]);
 
   const isConnected = status === 'connected';
   const isConnecting = status === 'connecting';

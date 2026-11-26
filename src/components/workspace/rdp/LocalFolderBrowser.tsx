@@ -19,6 +19,8 @@ export const LocalFolderBrowser: React.FC<Props> = ({ localPathRef, onSend }) =>
   const [localCurrentPath, setLocalCurrentPath] = useState<string>(localPathRef.current);
   const [localEntries, setLocalEntries] = useState<SftpFileEntry[]>([]);
   const [localLoading, setLocalLoading] = useState(false);
+  // Parent folder from the backend (works for Windows paths too); null at a file-system root
+  const [parentPath, setParentPath] = useState<string | null>(null);
 
   // Load local directory for folder picker
   const loadLocalDirectory = async (targetPath: string = '') => {
@@ -28,6 +30,7 @@ export const LocalFolderBrowser: React.FC<Props> = ({ localPathRef, onSend }) =>
       setLocalCurrentPath(res.currentPath);
       localPathRef.current = res.currentPath;
       setLocalEntries(res.entries);
+      setParentPath(res.parentPath ?? null);
     } catch (err) {
       console.error('Błąd odczytu katalogu lokalnego:', err);
     } finally {
@@ -40,11 +43,7 @@ export const LocalFolderBrowser: React.FC<Props> = ({ localPathRef, onSend }) =>
   }, []);
 
   const handleLocalNavigateUp = () => {
-    if (!localCurrentPath || localCurrentPath === '/') return;
-    const parts = localCurrentPath.split('/').filter(Boolean);
-    parts.pop();
-    const parentPath = '/' + parts.join('/');
-    loadLocalDirectory(parentPath || '/');
+    if (parentPath) loadLocalDirectory(parentPath);
   };
 
   return (
@@ -68,7 +67,7 @@ export const LocalFolderBrowser: React.FC<Props> = ({ localPathRef, onSend }) =>
       <div className="flex items-center gap-1">
         <button
           onClick={handleLocalNavigateUp}
-          disabled={!localCurrentPath || localCurrentPath === '/' || localLoading}
+          disabled={!parentPath || localLoading}
           className="flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
         >
           <ArrowUp className="h-3 w-3" />
@@ -82,7 +81,8 @@ export const LocalFolderBrowser: React.FC<Props> = ({ localPathRef, onSend }) =>
           }}
           className="flex-1 h-6 rounded border border-slate-700 bg-slate-900 px-2 font-mono text-[10px] text-slate-200"
         />
-        {localCurrentPath.split('/').filter(Boolean).length > 2 && (
+        {/* Not at a file-system root (the backend also refuses the whole home folder) */}
+        {parentPath && (
           <button
             onClick={() => onSend([localCurrentPath])}
             className="rounded bg-emerald-600 hover:bg-emerald-500 px-2 py-1 text-[10px] font-semibold text-white shrink-0"

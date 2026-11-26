@@ -4,6 +4,7 @@ import { APP_VERSION } from '../../version';
 import { api } from '../../services/api';
 import { VaultStatus } from '../../types';
 import { useT } from '../../i18n';
+import { MAX_PIN_LEN, MIN_PIN_LEN } from '../../utils/pin';
 
 interface Props {
   onUnlocked: (status: VaultStatus) => void;
@@ -40,7 +41,7 @@ export const PinModal: React.FC<Props> = ({ onUnlocked, onUseMasterPassword }) =
   };
 
   const handleDigitClick = (digit: string) => {
-    if (pin.length < 8) {
+    if (pin.length < MAX_PIN_LEN) {
       const nextPin = pin + digit;
       setPin(nextPin);
       if (nextPin.length >= 4) {
@@ -69,7 +70,8 @@ export const PinModal: React.FC<Props> = ({ onUnlocked, onUseMasterPassword }) =
 
         {/* PIN Dots */}
         <div className="my-6 flex justify-center gap-3">
-          {[0, 1, 2, 3].map((idx) => (
+          {/* One dot per typed digit (at least four placeholders) – the PIN can have 4 to 12 digits */}
+          {Array.from({ length: Math.max(MIN_PIN_LEN, pin.length) }, (_, idx) => idx).map((idx) => (
             <div
               key={idx}
               className={`h-4 w-4 rounded-full border transition-all ${
@@ -85,7 +87,7 @@ export const PinModal: React.FC<Props> = ({ onUnlocked, onUseMasterPassword }) =
         <form onSubmit={handleSubmit} className="mb-4">
           <input
             type="password"
-            maxLength={8}
+            maxLength={MAX_PIN_LEN}
             value={pin}
             onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
             autoFocus
@@ -129,7 +131,7 @@ export const PinModal: React.FC<Props> = ({ onUnlocked, onUseMasterPassword }) =
           </button>
           <button
             type="button"
-            disabled={pin.length < 4 || loading}
+            disabled={pin.length < MIN_PIN_LEN || loading}
             onClick={() => handleSubmit()}
             className="flex h-12 items-center justify-center rounded-xl bg-cyan-600 text-sm font-semibold text-white shadow-md shadow-cyan-600/30 transition-all hover:bg-cyan-500 disabled:opacity-40 active:scale-95"
           >

@@ -1,6 +1,6 @@
 /**
  * Keyboard of the RDP viewer: key combinations and typed text sent to Windows (key menu), F5
- * (button and the F5 key – the app itself must not reload), Ctrl+R blocked, and the NumLock
+ * (button and the F5 key – the app itself must not reload), and the NumLock
  * synchronisation before keypad keys. Moved out of RdpViewer.tsx as is.
  */
 import React, { useCallback, useEffect, useRef } from 'react';
@@ -142,7 +142,9 @@ export function useRdpKeyboard({ isActive, status, showToast, focusRdpCanvas, rd
     };
   }, [isActive, status]);
 
-  // Intercept F5 and Ctrl+R to prevent app reload, and send F5 to remote desktop if active
+  // F5 goes to the remote desktop (refresh in Windows) instead of reloading the app. Ctrl+R only
+  // must not reload the app (App.tsx prevents that); it still reaches Windows (refresh in Explorer
+  // or a browser) – before, it was swallowed here.
   useEffect(() => {
     if (!isActive) return;
 
@@ -153,10 +155,6 @@ export function useRdpKeyboard({ isActive, status, showToast, focusRdpCanvas, rd
         if (status === 'connected') {
           sendF5ToRemote();
         }
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R')) {
-        // Prevent accidental page reload
-        e.preventDefault();
-        e.stopPropagation();
       }
     };
 

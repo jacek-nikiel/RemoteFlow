@@ -31,6 +31,8 @@ Aplikacja wykorzystuje **Tauri 2 i Rust** jako natywny backend, **React 19 i Typ
 - Uwierzytelnianie hasłem, kluczem prywatnym (z opcjonalnym pytaniem o hasło klucza), certyfikatem OpenSSH lub agentem SSH. Klucze w formacie OpenSSH (Ed25519, ECDSA, RSA – domyślny format obecnego `ssh-keygen`), także chronione hasłem, działają na Windows i Linuksie; klucze PuTTY `.ppk` trzeba wyeksportować do formatu OpenSSH. Klucz i certyfikat można wskazać jako plik (odczytywany przy każdym połączeniu – odnowiony, krótkoterminowy certyfikat jest używany automatycznie) lub wkleić. Używana jest metoda wybrana w połączeniu, bez przechodzenia do innych; połączenie bez własnego hasła/klucza korzysta z metody swojego profilu poświadczeń.
 - Przekierowanie portów: lokalne, zdalne i dynamiczne (SOCKS5), z listą tuneli w każdej zakładce (stan, błędy, otwarte połączenia).
 - Kopiowanie i wklejanie z menu kontekstowego i klawiatury, wklejanie zaznaczenia środkowym przyciskiem myszy.
+- Przeciągnięcie plików lub katalogów na terminal (albo wklejenie skopiowanych plików Ctrl+V) wysyła je do bieżącego katalogu powłoki; postęp widać na przycisku Pliki (SFTP).
+- Ctrl+L, Ctrl+B, Ctrl+R i F5 trafiają do zdalnego systemu w sesjach SSH i RDP; Ctrl+Shift+L blokuje sejf, a Ctrl+Shift+B pokazuje/ukrywa pasek boczny wszędzie.
 - Weryfikacja klucza serwera przy pierwszym połączeniu (TOFU) – hasło jest wysyłane tylko do zaufanego serwera.
 
 ### SFTP – dwupanelowy menedżer plików

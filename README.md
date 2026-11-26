@@ -31,6 +31,8 @@ The application uses **Tauri 2 and Rust** for the native backend, **React 19 and
 - Authentication with password, private key (with optional passphrase prompt), OpenSSH certificate or SSH agent. Keys in the OpenSSH format (Ed25519, ECDSA, RSA – the default of current `ssh-keygen`), also passphrase-protected, work on Windows and Linux; PuTTY `.ppk` keys must be exported to the OpenSSH format. The key and the certificate can be chosen as a file (read at every connection, so a renewed short-lived certificate is used automatically) or pasted. The method chosen in the connection is used without falling back to others; a connection without its own secret follows the method of its credential profile.
 - Port forwarding: local, remote and dynamic (SOCKS5), with a tunnels list per tab (state, errors, open connections).
 - Copy/paste from the context menu and keyboard, middle-click paste of the terminal selection.
+- Drop files or folders on the terminal (or paste copied files with Ctrl+V) to upload them to the shell's current folder; progress is shown on the Files (SFTP) button.
+- Ctrl+L, Ctrl+B, Ctrl+R and F5 go to the remote side in SSH and RDP sessions; Ctrl+Shift+L locks the vault and Ctrl+Shift+B toggles the sidebar everywhere.
 - Server host keys verified on first use (TOFU) – the password is sent only to a trusted server.
 
 ### SFTP – two-pane file manager

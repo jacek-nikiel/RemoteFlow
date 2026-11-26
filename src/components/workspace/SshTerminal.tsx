@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import { api, isTauri } from '../../services/api';
 import { SessionInfo } from '../../types';
-import { rememberOscCwd } from '../../utils/terminalCwd';
+import { getOscCwd, rememberOscCwd } from '../../utils/terminalCwd';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import {
   onTerminalScrollbackChange,
   TERMINAL_LEAVE_ALTERNATE_SCREEN,
@@ -125,7 +126,6 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
   }, []);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuStyle = useMenuPosition(menuRef, contextMenu);
@@ -169,6 +169,35 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
     }
   }, [session.sessionId]);
 
+  // Files and folders dropped on the terminal or pasted into it are uploaded by the SFTP window's
+  // transfer (progress, Stop, indicator on the Files button – also with the window closed), to
+  // the current directory of the shell (home folder when it cannot be read). Everything is sent:
+  // also .git, node_modules, target… (the old upload skipped them silently).
+  const [sftpUploadRequest, setSftpUploadRequest] = useState<{ id: number; paths: string[]; targetDir: string } | null>(null);
+  const uploadToServer = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+      let targetDir = '';
+      try {
+        const cwd = await Promise.race([
+          api.terminalCwd(session.sessionId),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
+        ]);
+        targetDir = cwd.path;
+      } catch {
+        targetDir = getOscCwd(session.sessionId) || '';
+      }
+      showNotification(
+        tn(paths.length, ['Wysyłanie {n} elementu do {dir}', 'Wysyłanie {n} elementów do {dir}', 'Wysyłanie {n} elementów do {dir}'], {
+          n: paths.length,
+          dir: targetDir || t('katalogu domowego'),
+        })
+      );
+      setSftpUploadRequest({ id: Date.now(), paths, targetDir });
+    },
+    [session.sessionId, showNotification]
+  );
+
   // Paste text or files/folders into active terminal session
   const pasteInProgressRef = useRef(false);
   const handlePasteClipboard = useCallback(async () => {
@@ -179,16 +208,7 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
       // Check if files/directories were copied in the OS file manager
       const clipFiles = await api.clipboardReadFiles();
       if (clipFiles.length > 0) {
-        setIsUploading(true);
-        showNotification(tn(clipFiles.length, ['Przesyłanie {length} elementu ze schowka przez SFTP...', 'Przesyłanie {length} elementów ze schowka przez SFTP...', 'Przesyłanie {length} elementów ze schowka przez SFTP...'], { length: clipFiles.length }));
-        try {
-          const count = await api.sftpUploadPaths(session.connectionId, '.', clipFiles);
-          showNotification(tn(count, ['Przesłano ze schowka {count} plik do katalogu domowego', 'Przesłano ze schowka {count} pliki do katalogu domowego', 'Przesłano ze schowka {count} plików do katalogu domowego'], { count }));
-        } catch (err: any) {
-          showNotification(t('Błąd przesyłania: {p0}', { p0: err?.message || err }));
-        } finally {
-          setIsUploading(false);
-        }
+        await uploadToServer(clipFiles);
         return;
       }
 
@@ -210,7 +230,7 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
     } finally {
       pasteInProgressRef.current = false;
     }
-  }, [session.sessionId, session.connectionId, showNotification]);
+  }, [session.sessionId, showNotification, uploadToServer]);
 
   // Copy selected text to clipboard
   const handleCopySelection = useCallback(async () => {
@@ -568,6 +588,36 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
   }, []);
 
   // Drag and Drop handling for file transfers into the SSH terminal
+  // Files dropped from the system file manager: the window receives them natively (Tauri) –
+  // HTML drop events never carry them there, so dropping on the terminal did nothing before.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const inTerminal = (pos: { x: number; y: number }) => {
+      const area = containerRef.current;
+      if (!area) return false;
+      const el = document.elementFromPoint(pos.x / window.devicePixelRatio, pos.y / window.devicePixelRatio);
+      return !!el && area.contains(el); // not when the SFTP window or a dialog covers the point
+    };
+    let un: (() => void) | null = null;
+    let cancelled = false;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === 'enter' || p.type === 'over') setIsDragOver(inTerminal(p.position));
+        else if (p.type === 'leave') setIsDragOver(false);
+        else if (p.type === 'drop') {
+          setIsDragOver(false);
+          if (inTerminal(p.position) && p.paths.length > 0) void uploadToServer(p.paths);
+        }
+      })
+      .then((fn) => (cancelled ? fn() : (un = fn)))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (un) un();
+    };
+  }, [uploadToServer]);
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -585,60 +635,22 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
     e.stopPropagation();
     setIsDragOver(false);
 
-    // 1. Prioritize local file/directory URIs dropped from file manager for recursive SFTP upload
+    // Files from the system file manager arrive as a native drop (below); here only text.
+    // (Kept for a uri-list from apps that send paths as text.)
     const uriList = e.dataTransfer.getData('text/uri-list');
-    if (uriList) {
-      const paths = uriList
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => l.startsWith('file://'))
-        .map((l) => decodeURIComponent(l.replace('file://', '')));
-
-      if (paths.length > 0) {
-        setIsUploading(true);
-        showNotification(tn(paths.length, ['Przesyłanie rekursywne {length} elementu przez SFTP...', 'Przesyłanie rekursywne {length} elementów przez SFTP...', 'Przesyłanie rekursywne {length} elementów przez SFTP...'], { length: paths.length }));
-        try {
-          const count = await api.sftpUploadPaths(session.connectionId, '.', paths);
-          showNotification(tn(count, ['Przesłano pomyślnie {count} plik do katalogu domowego', 'Przesłano pomyślnie {count} pliki do katalogu domowego', 'Przesłano pomyślnie {count} plików do katalogu domowego'], { count }));
-        } catch (err: any) {
-          showNotification(t('Błąd przesyłania: {p0}', { p0: err?.message || err }));
-        } finally {
-          setIsUploading(false);
-        }
-        return;
-      }
-    }
-
-    // 2. Files dropped directly
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const files = e.dataTransfer.files;
-      setIsUploading(true);
-      showNotification(tn(files.length, ['Przesyłanie {length} pliku przez SFTP...', 'Przesyłanie {length} plików przez SFTP...', 'Przesyłanie {length} plików przez SFTP...'], { length: files.length }));
-
-      let count = 0;
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const relPath = (file as any).webkitRelativePath || file.name;
-        try {
-          const buffer = await file.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-          let binary = '';
-          for (let j = 0; j < bytes.byteLength; j++) {
-            binary += String.fromCharCode(bytes[j]);
-          }
-          const b64 = btoa(binary);
-          await api.sftpUploadFile(session.connectionId, '.', relPath, b64);
-          count++;
-        } catch (err: any) {
-          console.error('Błąd uploadu SFTP:', err);
-        }
-      }
-      setIsUploading(false);
-      showNotification(tn(files.length, ['Przesłano pomyślnie {count} z {length} pliku do katalogu domowego', 'Przesłano pomyślnie {count} z {length} plików do katalogu domowego', 'Przesłano pomyślnie {count} z {length} plików do katalogu domowego'], { count, length: files.length }));
+    const uriPaths = uriList
+      ? uriList
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.startsWith('file://'))
+          .map((l) => decodeURIComponent(l.replace(/^file:\/\/[^/]*/, '')))
+      : [];
+    if (uriPaths.length > 0) {
+      await uploadToServer(uriPaths);
       return;
     }
 
-    // 3. Fallback: plain text dropped -> pasted like Ctrl+V: xterm turns line breaks into Enter
+    // Plain text dropped -> pasted like Ctrl+V: xterm turns line breaks into Enter
     //    and wraps the text in bracketed-paste markers when the shell asked for them, so a dropped
     //    multi-line text is not executed line by line right away.
     const text = e.dataTransfer.getData('text/plain');
@@ -670,14 +682,6 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
           <div className="flex items-center gap-1 rounded-full bg-cyan-950/90 border border-cyan-500/50 px-2.5 py-0.5 text-[11px] text-cyan-300 shadow-md animate-fadeIn">
             <Check className="h-3 w-3 text-cyan-400 shrink-0" />
             <span>{feedback}</span>
-          </div>
-        )}
-
-        {/* Uploading Spinner Badge */}
-        {isUploading && (
-          <div className="flex items-center gap-1 rounded-full bg-amber-950/90 border border-amber-500/50 px-2.5 py-0.5 text-[11px] text-amber-300 shadow-md">
-            <Loader2 className="h-3 w-3 animate-spin text-amber-400 shrink-0" />
-            <span>{t('Przesyłanie SFTP...')}</span>
           </div>
         )}
 
@@ -764,7 +768,7 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
           <Upload className="h-12 w-12 text-cyan-400 mb-3 animate-bounce" />
           <h3 className="text-base font-bold text-white">{t('Upuść pliki lub katalogi tutaj')}</h3>
           <p className="text-xs text-cyan-200/90 mt-1 max-w-sm">
-            {t('Zostaną automatycznie przesłane przez protokół SFTP do Twojego katalogu na serwerze')}{' '}
+            {t('Zostaną przesłane przez SFTP do bieżącego katalogu terminala na serwerze')}{' '}
             <span className="font-mono font-semibold">{session.host}</span>.
           </p>
         </div>
@@ -837,6 +841,7 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
         fullWidth={splitLayout}
         onTransferChange={setSftpTransfer}
         onTransferDone={onSftpTransferDone}
+        uploadRequest={sftpUploadRequest}
       />
 
       {isTunnelsOpen && (

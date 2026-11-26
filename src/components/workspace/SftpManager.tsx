@@ -98,6 +98,12 @@ interface Props {
   onTransferChange?: (transfer: SftpTransferInfo | null) => void;
   /** A transfer ended: the summary shown in the status bar and whether it went fully well. */
   onTransferDone?: (text: string, ok: boolean) => void;
+  /**
+   * Upload asked for outside the window (files dropped on the terminal or pasted into it): runs
+   * as a normal transfer – progress, Stop, the indicator on the terminal button – also while the
+   * window is closed. A new `id` starts a new upload.
+   */
+  uploadRequest?: { id: number; paths: string[]; targetDir: string } | null;
 }
 
 /** Running transfer as shown outside the window. */
@@ -165,6 +171,7 @@ export const SftpManager: React.FC<Props> = ({
   fullWidth,
   onTransferChange,
   onTransferDone,
+  uploadRequest,
 }) => {
   const t = useT();
   const [local, setLocal] = useState<PaneState>(emptyPane);
@@ -425,6 +432,19 @@ export const SftpManager: React.FC<Props> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [connectionId, local.path, remote.path, loadLocal, loadRemote, onNotify, showStatus, showBusyNotice]
   );
+
+  // Upload asked for by the terminal (drop / paste of files)
+  const lastUploadRequestRef = useRef(0);
+  useEffect(() => {
+    if (!uploadRequest || uploadRequest.id === lastUploadRequestRef.current) return;
+    lastUploadRequestRef.current = uploadRequest.id;
+    if (busyRef.current) {
+      onNotify?.(t('Aktualnie trwa operacja: {what}. Poczekaj na jej zakończenie.', { what: busyRef.current }));
+      return;
+    }
+    void runTransfer('local', uploadRequest.paths, uploadRequest.targetDir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadRequest]);
 
   /** Transfer to the other side; asks before overwriting items that already exist there. */
   const transfer = useCallback(

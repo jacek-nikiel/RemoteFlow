@@ -867,20 +867,6 @@ export const api = {
     };
   },
 
-  async sftpUploadFile(connectionId: string, remoteDir: string, filename: string, contentBase64: string): Promise<number> {
-    if (isTauri()) {
-      return await invoke<number>('sftp_upload_file', { connectionId, remoteDir, filename, contentBase64 });
-    }
-    return 1024;
-  },
-
-  async sftpUploadPaths(connectionId: string, remoteDir: string, localPaths: string[]): Promise<number> {
-    if (isTauri()) {
-      return await invoke<number>('sftp_upload_paths', { connectionId, remoteDir, localPaths });
-    }
-    return localPaths.length;
-  },
-
   async openSharedFolder(targetDir?: string): Promise<string> {
     if (isTauri()) {
       return await invoke<string>('open_shared_folder', { targetDir: targetDir || null });
@@ -892,17 +878,12 @@ export const api = {
    * Saves a file in the connection's exchange folder (from the vault – the folder is never passed
    * from here) or, without a connection, in the downloads folder.
    */
-  async saveDroppedFileToShared(
-    filename: string,
-    contentBase64: string,
-    connectionId?: string
-  ): Promise<string> {
+  /** Saves a file received from the RDP session (raw bytes) into the connection's exchange folder. */
+  async saveDroppedFileToShared(filename: string, data: Uint8Array, connectionId?: string): Promise<string> {
     if (isTauri()) {
-      return await invoke<string>('save_dropped_file_to_shared', {
-        filename,
-        contentBase64,
-        connectionId: connectionId || null,
-      });
+      const headers: Record<string, string> = { 'x-filename': encodeURIComponent(filename) };
+      if (connectionId) headers['x-connection-id'] = encodeURIComponent(connectionId);
+      return await invoke<string>('save_dropped_file_to_shared', data, { headers });
     }
     return `~/Downloads/${filename}`;
   },
@@ -1018,11 +999,16 @@ export const api = {
     return null;
   },
 
-  async readLocalPathsForRdpClipboard(localPaths: string[]): Promise<import('../types').RdpClipboardFileEntry[]> {
+  async readLocalPathsForRdpClipboard(localPaths: string[]): Promise<import('../types').RdpClipboardRead> {
     if (isTauri()) {
-      return await invoke<import('../types').RdpClipboardFileEntry[]>('read_local_paths_for_rdp_clipboard', { localPaths });
+      return await invoke<import('../types').RdpClipboardRead>('read_local_paths_for_rdp_clipboard', { localPaths });
     }
-    return [];
+    return { entries: [], skippedLarge: 0, truncated: false };
+  },
+
+  /** Content of a local file as raw bytes (no Base64). */
+  async readLocalFileBytes(path: string): Promise<ArrayBuffer> {
+    return await invoke<ArrayBuffer>('read_local_file_bytes', { path });
   },
 
   /** Display settings applied at start-up (Linux: GPU / compatible rendering). */

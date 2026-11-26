@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { withoutGroupCycles } from '../../utils/groupTree';
 import {
   Folder,
   FolderOpen,
@@ -51,7 +52,7 @@ interface Props {
 }
 
 export const Sidebar: React.FC<Props> = ({
-  groups,
+  groups: rawGroups,
   connections,
   searchQuery,
   onSearchChange,
@@ -68,6 +69,8 @@ export const Sidebar: React.FC<Props> = ({
   onNewConnection,
   onNewGroup,
 }) => {
+  // A folder cycle (A → B → A) must not hide a branch or make the tree recurse endlessly
+  const groups = useMemo(() => withoutGroupCycles(rawGroups), [rawGroups]);
   const t = useT();
   const [groupMenu, setGroupMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const groupMenuRef = useRef<HTMLDivElement>(null);
@@ -244,10 +247,12 @@ export const Sidebar: React.FC<Props> = ({
   };
 
   // Recursively collect all connections in a group and its descendants (Założenie 3)
-  const getAllGroupConnectionsRecursive = (groupId: string): Connection[] => {
+  const getAllGroupConnectionsRecursive = (groupId: string, visiting: Set<string> = new Set()): Connection[] => {
+    if (visiting.has(groupId)) return [];
+    visiting.add(groupId);
     const direct = filteredConnections.filter((c) => c.groupId === groupId);
     const children = getChildGroups(groupId);
-    const childConns = children.flatMap((child) => getAllGroupConnectionsRecursive(child.id));
+    const childConns = children.flatMap((child) => getAllGroupConnectionsRecursive(child.id, visiting));
     return [...direct, ...childConns];
   };
 

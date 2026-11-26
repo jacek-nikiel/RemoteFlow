@@ -45,8 +45,8 @@ export const Header: React.FC<Props> = ({
           onClick={onToggleSidebar}
           title={
             isSidebarCollapsed
-              ? t('Pokaż panel połączeń (drzewo hostów) [Ctrl+B]')
-              : t('Schowaj panel połączeń (pełny ekran dla terminala) [Ctrl+B]')
+              ? t('Pokaż panel połączeń (drzewo hostów) [Ctrl+Shift+B]')
+              : t('Schowaj panel połączeń (pełny ekran dla terminala) [Ctrl+Shift+B]')
           }
           className="flex h-6.5 w-6.5 items-center justify-center rounded-md border border-slate-800 bg-slate-800/60 text-slate-300 transition-colors hover:border-cyan-500/40 hover:bg-slate-800 hover:text-cyan-400"
         >
@@ -125,8 +125,8 @@ export const Header: React.FC<Props> = ({
           onClick={onLock}
           title={
             vaultStatus?.pinEnabled
-              ? t('Zablokuj aplikację kodem PIN (Ctrl+L)')
-              : t('Zablokuj aplikację hasłem Master (Ctrl+L)')
+              ? t('Zablokuj aplikację kodem PIN (Ctrl+Shift+L)')
+              : t('Zablokuj aplikację hasłem Master (Ctrl+Shift+L)')
           }
           className="flex h-6.5 w-6.5 items-center justify-center rounded-md border border-slate-800 bg-slate-800/40 text-slate-400 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-400"
         >

@@ -11,6 +11,8 @@ pub fn vault_get_data(state: tauri::State<'_, AuthState>) -> Result<VaultData, S
     let mgr = lock_auth(&state)?;
     let key = mgr.unlocked_key()?;
     let mut vault = load_vault_verified(key)?;
+    // A folder cycle (older version, imported file) would hide the whole branch in the tree
+    crate::vault::models::group_tree::break_cycles(&mut vault.groups);
     // Not needed by the UI.
     vault.mac = None;
     vault.metadata.pin_encrypted_base64 = None;
@@ -142,8 +144,19 @@ pub(crate) fn vault_clone_connection_impl(connection_id: &str, state: &AuthState
 pub fn vault_save_group(group: Group, state: tauri::State<'_, AuthState>) -> Result<Group, String> {
     let mgr = lock_auth(&state)?;
     let key = mgr.unlocked_key()?;
+    let mut group = group;
+    if group.parent_id.as_deref() == Some("") {
+        group.parent_id = None;
+    }
     let saved = group.clone();
     update_vault(key, |v| {
+        if crate::vault::models::group_tree::parent_creates_cycle(&v.groups, &group.id, group.parent_id.as_deref()) {
+            return Err(tr!(
+                "Folder nie może być umieszczony we własnym podfolderze.",
+                "A folder cannot be placed inside its own subfolder."
+            )
+            .to_string());
+        }
         upsert_by_id(&mut v.groups, group, |g| g.id.as_str());
         Ok(())
     })?;
@@ -155,8 +168,15 @@ pub fn vault_delete_group(group_id: &str, state: tauri::State<'_, AuthState>) ->
     let mgr = lock_auth(&state)?;
     let key = mgr.unlocked_key()?;
     update_vault(key, |v| {
-        // Remove group and reassign orphaned connections to None
+        // Remove the group; its subfolders move up to its parent, its connections become
+        // "without a folder" (as before)
+        let parent = v.groups.iter().find(|g| g.id == group_id).and_then(|g| g.parent_id.clone());
         v.groups.retain(|g| g.id != group_id);
+        for g in v.groups.iter_mut() {
+            if g.parent_id.as_deref() == Some(group_id) {
+                g.parent_id = parent.clone();
+            }
+        }
         for conn in v.connections.iter_mut() {
             if conn.group_id.as_deref() == Some(group_id) {
                 conn.group_id = None;

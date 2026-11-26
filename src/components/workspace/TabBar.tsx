@@ -372,7 +372,7 @@ export const TabBar: React.FC<Props> = ({
         <button
           type="button"
           onClick={onToggleSidebar}
-          title={t('Pokaż panel połączeń (drzewo hostów) [Ctrl+B]')}
+          title={t('Pokaż panel połączeń (drzewo hostów) [Ctrl+Shift+B]')}
           className="flex h-7 items-center gap-1.5 rounded-md bg-slate-900 border border-slate-800 px-2 text-xs text-slate-300 hover:border-cyan-500/40 hover:bg-slate-800 hover:text-cyan-400 transition-colors shrink-0 mr-1.5"
         >
           <PanelLeftOpen className="h-3.5 w-3.5 text-cyan-400" />
@@ -623,8 +623,8 @@ export const TabBar: React.FC<Props> = ({
             onClick={onToggleSidebar}
             title={
               isSidebarCollapsed
-                ? t('Pokaż panel połączeń [Ctrl+B]')
-                : t('Schowaj panel połączeń (pełny ekran) [Ctrl+B]')
+                ? t('Pokaż panel połączeń [Ctrl+Shift+B]')
+                : t('Schowaj panel połączeń (pełny ekran) [Ctrl+Shift+B]')
             }
             className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-slate-800 hover:text-cyan-400 transition-colors"
           >

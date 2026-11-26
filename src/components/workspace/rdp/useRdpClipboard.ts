@@ -171,41 +171,51 @@ export function useRdpClipboard({ session, showToast, focusRdpCanvas, rdpWasmSes
     if (!localPaths || localPaths.length === 0) return;
     setIsSavingFiles(true);
     try {
-      const entries = await api.readLocalPathsForRdpClipboard(localPaths);
+      const { entries, skippedLarge, truncated } = await api.readLocalPathsForRdpClipboard(localPaths);
       if (entries.length === 0) {
         showToast(t('Nie znaleziono plików do przesłania'));
         return;
       }
+      if (skippedLarge > 0 || truncated) {
+        showToast(
+          [
+            skippedLarge > 0 ? t('Pominięto plików większych niż 1 GB: {n}', { n: skippedLarge }) : '',
+            truncated ? t('Za dużo plików naraz – dodano pierwsze 5000 elementów.') : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
+          6000
+        );
+      }
 
-      const droppedFiles: DroppedFile[] = entries.map((ent) => {
-        if (ent.isDirectory || !ent.contentBase64) {
-          return {
+      // Content read as raw bytes (it came as Base64 in JSON before: ~2.7x the size and a
+      // character-by-character conversion on the UI thread)
+      const droppedFiles: DroppedFile[] = [];
+      for (const ent of entries) {
+        if (ent.isDirectory || !ent.localPath) {
+          droppedFiles.push({
             file: null,
             name: ent.name,
             size: 0,
             lastModified: ent.lastModified || Date.now(),
             path: ent.path || undefined,
             isDirectory: true,
-          };
+          });
+          continue;
         }
-        const binaryString = atob(ent.contentBase64);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
+        const bytes = await api.readLocalFileBytes(ent.localPath);
         const fileObj = new window.File([bytes], ent.name, {
           lastModified: ent.lastModified || Date.now(),
         });
-        return {
+        droppedFiles.push({
           file: fileObj,
           name: ent.name,
-          size: ent.size,
+          size: fileObj.size,
           lastModified: ent.lastModified || Date.now(),
           path: ent.path || undefined,
           isDirectory: false,
-        };
-      });
+        });
+      }
 
       await stageDroppedFilesToRdpClipboard(droppedFiles);
       setIsLocalBrowserOpen(false);
@@ -243,15 +253,9 @@ export function useRdpClipboard({ session, showToast, focusRdpCanvas, rdpWasmSes
 
         const { completion } = provider.downloadFile(fileInfo, i);
         const blob = await completion;
-        const buffer = await blob.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        for (let j = 0; j < bytes.byteLength; j++) {
-          binary += String.fromCharCode(bytes[j]);
-        }
-        const b64 = btoa(binary);
+        const bytes = new Uint8Array(await blob.arrayBuffer());
         const relName = fileInfo.path ? `${fileInfo.path}\\${fileInfo.name}` : fileInfo.name;
-        await api.saveDroppedFileToShared(relName, b64, session.connectionId);
+        await api.saveDroppedFileToShared(relName, bytes, session.connectionId);
         savedCount++;
       }
 
@@ -324,14 +328,9 @@ export function useRdpClipboard({ session, showToast, focusRdpCanvas, rdpWasmSes
           for (const df of dropped) {
             if (!df.isDirectory && df.file) {
               try {
-                const buf = await df.file.arrayBuffer();
-                const bytes = new Uint8Array(buf);
-                let binary = '';
-                for (let j = 0; j < bytes.byteLength; j++) {
-                  binary += String.fromCharCode(bytes[j]);
-                }
+                const bytes = new Uint8Array(await df.file.arrayBuffer());
                 const rel = df.path ? `${df.path}\\${df.name}` : df.name;
-                await api.saveDroppedFileToShared(rel, btoa(binary));
+                await api.saveDroppedFileToShared(rel, bytes);
               } catch {}
             }
           }
@@ -488,6 +487,7 @@ export function useRdpClipboard({ session, showToast, focusRdpCanvas, rdpWasmSes
     remoteClipboardText,
     setRemoteClipboardText,
     isDragOver,
+    setIsDragOver,
     isSavingFiles,
     stagedUploadNames,
     setStagedUploadNames,

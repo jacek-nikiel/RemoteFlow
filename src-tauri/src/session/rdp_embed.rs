@@ -34,6 +34,28 @@ mod imp {
     use tauri::{AppHandle, Manager};
 
     static X11: AtomicBool = AtomicBool::new(false);
+    /// The vault is locked (lock screen shown): no container may be visible, whatever the page
+    /// reports – its visibility check runs on timers that the web view throttles when the window
+    /// is minimised or the screen is locked.
+    static LOCKED: AtomicBool = AtomicBool::new(false);
+
+    /// Hides every container at once when the vault is locked; unlocking lets the page show them
+    /// again with its next update.
+    pub fn set_locked(app: &AppHandle, locked: bool) {
+        LOCKED.store(locked, Ordering::SeqCst);
+        if !locked {
+            return;
+        }
+        let app_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let windows: Vec<gdk::Window> = CONTAINERS.with(|c| c.borrow().values().cloned().collect());
+            WANTED.with(|w| w.borrow_mut().values_mut().for_each(|v| *v = false));
+            for window in windows.iter().filter(|w| w.is_visible()) {
+                take_focus_back(&app_main, Some(window));
+                window.hide();
+            }
+        });
+    }
 
     thread_local! {
         /// Container windows by session id (GDK objects live on the GTK main thread only).
@@ -155,7 +177,7 @@ mod imp {
     /// Shows the container when the UI wants it and FreeRDP's window is ready.
     fn show_if_ready(session_id: &str, window: &gdk::Window) {
         let wanted = WANTED.with(|w| w.borrow().get(session_id).copied().unwrap_or(false));
-        if wanted && !window.is_visible() && session_window(session_id, window).is_some() {
+        if wanted && !LOCKED.load(Ordering::SeqCst) && !window.is_visible() && session_window(session_id, window).is_some() {
             window.show();
             window.raise();
         }
@@ -346,7 +368,7 @@ mod imp {
     /// Position, size and visibility of a container. Must run on the GTK main thread.
     pub fn update(app: &AppHandle, session_id: &str, rect: EmbedRect, visible: bool) {
         let Some(window) = CONTAINERS.with(|c| c.borrow().get(session_id).cloned()) else { return };
-        let visible = visible && rect.width >= 2.0 && rect.height >= 2.0;
+        let visible = visible && rect.width >= 2.0 && rect.height >= 2.0 && !LOCKED.load(Ordering::SeqCst);
         WANTED.with(|w| w.borrow_mut().insert(session_id.to_string(), visible));
         if !visible {
             if window.is_visible() {
@@ -375,7 +397,11 @@ mod imp {
 }
 
 #[cfg(target_os = "linux")]
-pub use imp::{init, is_x11};
+pub use imp::{init, is_x11, set_locked};
+
+/// Locked vault: hide every embedded FreeRDP window at once (only Linux X11 embeds them).
+#[cfg(not(target_os = "linux"))]
+pub fn set_locked(_app: &tauri::AppHandle, _locked: bool) {}
 
 #[cfg(not(target_os = "linux"))]
 pub fn init() {}
