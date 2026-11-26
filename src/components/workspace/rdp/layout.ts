@@ -22,8 +22,9 @@ export const RESOLUTION_PRESETS = [
  */
 export function autoSizeFromArea(width: number, height: number, ratio = 1): { width: number; height: number } | null {
   if (width <= 300 || height <= 200) return null; // hidden tab / not laid out yet
-  let w = Math.min(8192, Math.max(640, Math.round(width * ratio)));
-  let h = Math.min(8192, Math.max(480, Math.round(height * ratio)));
+  // Rounded down: a desktop even half a pixel larger than the area could not be shown 1:1
+  let w = Math.min(8192, Math.max(640, Math.floor(width * ratio)));
+  let h = Math.min(8192, Math.max(480, Math.floor(height * ratio)));
   w = w - (w % 4);
   h = h - (h % 4);
   return { width: w, height: h };
@@ -95,6 +96,8 @@ export interface RdpDisplayInfo {
   screen: number;
   /** Screen pixels per remote pixel (1 = sharp 1:1). */
   scale: number;
+  /** 1:1 only: how far the canvas is from a whole screen pixel after snapping (0 = aligned). */
+  misalign: number;
 }
 
 let requestedSize: RdpDisplayInfo['requested'] = null;
@@ -146,7 +149,12 @@ export function applyCanvasStyle(shadowRoot: ShadowRoot | null | undefined, area
   let scale = 1;
   if (mode === 'fit') {
     scale = Math.min(area.width / w1, area.height / h1);
-    if (scale >= 1 && scale < 1.02) scale = 1;
+    // Almost one remote pixel per screen pixel (the Auto desktop): exactly 1:1. Also when the
+    // desktop is at most 2 screen pixels larger than the area (rounding, a scrollbar, a server
+    // that rounds the size up) – cropping 2 pixels is better than blurring the whole picture.
+    const overX = canvas.width - area.width * dpr;
+    const overY = canvas.height - area.height * dpr;
+    if ((scale >= 1 && scale < 1.02) || (scale < 1 && overX <= 2 && overY <= 2)) scale = 1;
   }
   const w = w1 * scale;
   const h = h1 * scale;
@@ -156,12 +164,18 @@ export function applyCanvasStyle(shadowRoot: ShadowRoot | null | undefined, area
     area: { width: Math.round(area.width * dpr), height: Math.round(area.height * dpr) },
     screen: Math.round(dpr * 100),
     scale,
+    misalign: 0,
   };
-  const align = mode === 'real' ? 'flex-start' : 'center';
+  // 1:1: the canvas is placed from the top left with margins that land it exactly on a screen
+  // pixel (also centred). Centring with flexbox put it at half pixels (area 1 px wider than the
+  // desktop), and a transform shifting it back made the compositor resample it: single rows and
+  // columns of the picture were lost (broken letters). Scaled pictures are centred as before.
+  const exact = scale === 1;
+  const align = mode === 'real' || exact ? 'flex-start' : 'center';
   // Selectors doubled: they must outrank the generic overrides (applyShadowRootScalingOverrides,
   // e.g. ".screen-wrapper:not(.scale-real) canvas#renderer"), which are also !important
-  const css = (dx: number, dy: number) => `
-    :host, .svelte-1103xra.svelte-1103xra, .screen-wrapper.screen-wrapper.screen-wrapper, .screen-viewer.screen-viewer {
+  const css = (mx: number, my: number) => `
+    :host, :host > div:first-child:first-child, .screen-wrapper.screen-wrapper.screen-wrapper, .screen-viewer.screen-viewer {
       justify-content: ${align} !important;
       align-items: ${align} !important;
     }
@@ -184,14 +198,24 @@ export function applyCanvasStyle(shadowRoot: ShadowRoot | null | undefined, area
       min-height: 0 !important;
       max-width: none !important;
       max-height: none !important;
-      transform: translate(${dx}px, ${dy}px) !important;
-      image-rendering: ${scale === 1 ? 'pixelated' : 'auto'} !important;
+      margin: ${my}px 0 0 ${mx}px !important;
+      transform: none !important;
+      image-rendering: ${exact ? 'pixelated' : 'auto'} !important;
     }`;
   setCss(css(0, 0));
-  if (scale !== 1) return;
-  const rect = canvas.getBoundingClientRect(); // layout without the shift
-  const snap = (v: number) => (Math.round(v * dpr) - v * dpr) / dpr;
-  setCss(css(snap(rect.left), snap(rect.top)));
+  if (!exact) return;
+  // Where the canvas starts without margins (the top left of the viewer, possibly between pixels)
+  const origin = canvas.getBoundingClientRect();
+  const centre = mode === 'fit';
+  const place = (start: number, areaStart: number, areaSize: number, size: number) => {
+    const wanted = centre ? areaStart + (areaSize - size) / 2 : start;
+    return Math.round(wanted * dpr) / dpr - start;
+  };
+  setCss(css(place(origin.left, area.left, area.width, w), place(origin.top, area.top, area.height, h)));
+  // Check: a canvas between two screen pixels shows doubled / missing pixel rows or columns
+  const after = canvas.getBoundingClientRect();
+  const off = (v: number) => Math.abs(v * dpr - Math.round(v * dpr));
+  displayInfo.misalign = Math.max(off(after.left), off(after.top));
 }
 
 // Inject CSS overrides into open ShadowRoot of <iron-remote-desktop> so canvas scales to fit without clipping or covering the Windows taskbar
@@ -217,7 +241,8 @@ export function applyShadowRootScalingOverrides(shadowRoot: ShadowRoot | null) {
       align-items: center !important;
       justify-content: center !important;
     }
-    .svelte-1103xra {
+    /* outer element of the component (its svelte class hash changes between versions) */
+    :host > div:first-child {
       display: flex !important;
       width: 100% !important;
       height: 100% !important;

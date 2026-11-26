@@ -4,6 +4,7 @@ import { useT } from '../../i18n';
 import { api } from '../../services/api';
 import { APP_VERSION } from '../../version';
 import { getRdpDisplayInfo } from './rdp/layout';
+import { activeRdpColorDepth } from './rdp/graphicsMode';
 import { RdpBurst, RdpStatsSnapshot, resetRdpStats, setRdpStatsEnabled, takeRdpStats } from '../../utils/rdpStats';
 
 const f1 = (n: number) => n.toFixed(1);
@@ -45,7 +46,12 @@ export const RdpStatsPanel: React.FC<{ onClose: () => void }> = ({ onClose }) =>
           : '–',
         area: `${d.area.width}×${d.area.height}`,
         screen: d.screen,
-        shown: d.scale === 1 ? t('pokazany 1:1 (ostro)') : t('przeskalowany ×{s}', { s: d.scale.toFixed(3) }),
+        shown:
+          d.scale !== 1
+            ? t('przeskalowany ×{s}', { s: d.scale.toFixed(3) })
+            : d.misalign > 0.05
+              ? t('1:1, ale przesunięty o {px} px ekranu', { px: d.misalign.toFixed(2) })
+              : t('pokazany 1:1 (ostro)'),
       })
     : '–';
 
@@ -53,6 +59,7 @@ export const RdpStatsPanel: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     ? [
         [t('Silnik'), `${s.engine}, ${s.canvas}`],
         [t('Obraz'), displayText],
+        [t('Grafika'), activeRdpColorDepth() ? t('potok graficzny (GFX), {depth} bit', { depth: activeRdpColorDepth() }) : '–'],
         [t('Dane z serwera'), t('{mb} MB/s ({n} wiad./s)', { mb: f1(s.mbps), n: f0(s.msgs) })],
         [t('Aktualizacje ekranu'), t('{n} regionów/s, {mpx} Mpx/s', { n: f0(s.regions), mpx: f1(s.mpx) })],
         ...(s.engine.startsWith('WebKit') ? [[t('Klatki wyświetlone'), `${f0(s.frames)}/s`] as [string, string]] : []),

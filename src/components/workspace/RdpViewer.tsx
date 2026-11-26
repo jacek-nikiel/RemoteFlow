@@ -6,8 +6,10 @@ import {
   Backend,
   enableCredssp,
   displayControl,
+  colorDepth,
   RdpFileTransferProvider,
 } from '@devolutions/iron-remote-desktop-rdp';
+import { noteRdpColorDepth, rdpColorDepth } from './rdp/graphicsMode';
 import { SessionInfo } from '../../types';
 import { api, isTauri, isWindowsHost } from '../../services/api';
 import { listen } from '@tauri-apps/api/event';
@@ -436,6 +438,9 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
           try {
             configBuilder.withExtension(enableCredssp(true));
             configBuilder.withExtension(displayControl(true));
+            const depth = rdpColorDepth(session.rdpSettings?.colorDepth);
+            configBuilder.withExtension(colorDepth(depth));
+            noteRdpColorDepth(depth);
           } catch (extErr) {
             console.warn('[RemoteFlow RDP] Ostrzeżenie przy dodawaniu rozszerzenia:', extErr);
           }
@@ -768,6 +773,15 @@ export const RdpViewer: React.FC<Props> = ({ session, isActive }) => {
       }
     }
   }, [isActive, scaleMode, focusRdpCanvas, refreshCanvasStyle]);
+
+  // The pixel-exact placement can be lost by layout changes that resize nothing observed here
+  // (e.g. a scrollbar or a badge in the bar shifting the area by a fraction of a pixel): check
+  // it again every second while the session is shown.
+  useEffect(() => {
+    if (!isActive || status !== 'connected') return;
+    const id = setInterval(refreshCanvasStyle, 1000);
+    return () => clearInterval(id);
+  }, [isActive, status, refreshCanvasStyle]);
 
   const isConnected = status === 'connected';
   const isConnecting = status === 'connecting';

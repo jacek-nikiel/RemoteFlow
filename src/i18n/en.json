@@ -1013,5 +1013,8 @@
   "Teraz: {current}": "Now: {current}",
   "Przesłano: {size}, gotowych plików: {files}": "Transferred: {size}, files done: {files}",
   "Kliknij, aby zobaczyć postęp lub przerwać.": "Click to see the progress or cancel.",
-  "trwa…": "running…"
+  "trwa…": "running…",
+  "1:1, ale przesunięty o {px} px ekranu": "1:1, but shifted by {px} screen px",
+  "Grafika": "Graphics",
+  "potok graficzny (GFX), {depth} bit": "graphics pipeline (GFX), {depth}-bit"
 }
