@@ -60,15 +60,17 @@ export const JumpHostPicker: React.FC<Props> = ({ id, value, onChange, candidate
     return q ? list : [null, ...list];
   }, [query, candidates, pathOf]);
 
-  useEffect(() => {
-    if (!open) return;
+  // Opening: empty search, the current choice highlighted
+  const openList = () => {
     setQuery('');
     const idx = value ? candidates.findIndex((c) => c.id === value) + 1 : 0;
     setActive(Math.max(idx, 0));
-    inputRef.current?.focus();
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    setOpen(true);
+  };
 
-  useEffect(() => setActive(0), [query]);
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
 
   // Keep the highlighted row visible
   useEffect(() => {
@@ -119,7 +121,7 @@ export const JumpHostPicker: React.FC<Props> = ({ id, value, onChange, candidate
       <button
         id={id}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (open ? setOpen(false) : openList())}
         aria-haspopup="listbox"
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-left text-xs text-white focus:border-cyan-500 focus:outline-none"
@@ -135,7 +137,10 @@ export const JumpHostPicker: React.FC<Props> = ({ id, value, onChange, candidate
             <input
               ref={inputRef}
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setActive(0);
+              }}
               placeholder={t('Szukaj: nazwa, adres, użytkownik, folder…')}
               className="w-full bg-transparent text-xs text-white placeholder:text-slate-500 focus:outline-none"
             />

@@ -702,6 +702,27 @@ pub(crate) fn jump_host_chain(
     if resolved.conn.protocol != "ssh" {
         return Err(tr!("Serwer pośredniczący „{}” nie jest połączeniem SSH", "Jump host “{}” is not an SSH connection", resolved.conn.name));
     }
+    // The UI asks for these when the connection itself is opened – not when it is a jump host
+    let empty = |v: &Option<String>| v.as_deref().is_none_or(str::is_empty);
+    let auth = resolved.conn.ssh_auth_type.as_str();
+    if auth == "password" && empty(&resolved.password) {
+        return Err(tr!(
+            "Serwer pośredniczący „{}” nie ma zapisanego hasła – zapisz je w jego ustawieniach (hasło wpisywane przy łączeniu nie działa dla serwera pośredniczącego).",
+            "Jump host “{}” has no saved password – save it in its settings (a password typed when connecting does not work for a jump host).",
+            resolved.conn.name
+        ));
+    }
+    if matches!(auth, "key" | "certificate")
+        && resolved.conn.prompt_key_passphrase == Some(true)
+        && empty(&resolved.passphrase)
+        && resolved.private_key.as_deref().is_some_and(crate::session::ssh_keyauth::key_needs_passphrase)
+    {
+        return Err(tr!(
+            "Serwer pośredniczący „{}” pyta o hasło klucza przy łączeniu – zapisz hasło klucza w jego ustawieniach, aby używać go jako serwera pośredniczącego.",
+            "Jump host “{}” asks for the key passphrase when connecting – save the passphrase in its settings to use it as a jump host.",
+            resolved.conn.name
+        ));
+    }
     let host = resolved.conn.host.clone();
     let port = resolved.conn.port;
     let config = SshConnectionConfig {

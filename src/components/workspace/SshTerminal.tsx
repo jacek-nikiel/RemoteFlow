@@ -494,7 +494,10 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
       const message = session.statusMessage || '';
       if (recentOutputRef.current.includes(message.split('\n')[0].slice(0, 60))) return;
       const msg = message.replace(/\r?\n/g, '\r\n');
-      term.write(`\r\n\x1b[1;31m[${t('RemoteFlow Błąd SSH')}]\x1b[0m ${msg}\r\n`);
+      const line = `\r\n\x1b[1;31m[${t('RemoteFlow Błąd SSH')}]\x1b[0m ${msg}\r\n`;
+      // Counted as shown, so a re-run of this effect (e.g. language switch) does not repeat it
+      recentOutputRef.current = (recentOutputRef.current + message).slice(-4096);
+      term.write(line);
     }, 300);
     return () => {
       clearTimeout(timer);

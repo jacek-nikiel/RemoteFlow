@@ -968,15 +968,15 @@ export const api = {
     await navigator.clipboard.writeText(text);
   },
 
-  /**
-   * Saves a file where the user chooses in the native "Save as" dialog. Returns the path, or null
-   * when cancelled. Outside the app (browser preview) falls back to a regular download.
-   */
   /** PuTTY key (.ppk) converted to OpenSSH (same passphrase) and saved where the user chooses. */
   async ppkSaveAsOpenssh(content: string, passphrase: string): Promise<string | null> {
     return await invoke<string | null>('ppk_save_as_openssh', { content, passphrase: passphrase || null });
   },
 
+  /**
+   * Saves a file where the user chooses in the native "Save as" dialog. Returns the path, or null
+   * when cancelled. Outside the app (browser preview) falls back to a regular download.
+   */
   async saveFileAs(defaultName: string, content: string, filterName: string, extension: string): Promise<string | null> {
     if (isTauri()) {
       return await invoke<string | null>('save_file_as', { defaultName, content, filterName, extension });

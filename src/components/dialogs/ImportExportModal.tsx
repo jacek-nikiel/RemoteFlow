@@ -371,7 +371,7 @@ export const ImportExportModal: React.FC<Props> = ({
             </div>
           )}
 
-          {/* TAB 1: EXPORT */}
+          {/* Import from OpenSSH / PuTTY / WinSCP */}
           {activeTab === 'import_apps' && (
             <ImportFromApps
               groups={groups}
@@ -383,6 +383,7 @@ export const ImportExportModal: React.FC<Props> = ({
             />
           )}
 
+          {/* TAB 1: EXPORT */}
           {activeTab === 'export' && (
             <form onSubmit={handleExport} className="space-y-5">
               <ExportScopeSelector groups={groups} connections={connections} value={exportScope}

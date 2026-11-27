@@ -172,20 +172,32 @@ pub mod ssh_config {
         Some((kw.to_ascii_lowercase(), args))
     }
 
-    /// Glob match with `*` and `?` (case-insensitive, as OpenSSH does for host names).
+    /// Glob match with `*` and `?` (case-insensitive, as OpenSSH does for host names). Linear
+    /// backtracking (only the last `*` is retried), so no pattern can make it slow.
     fn glob(pattern: &str, text: &str) -> bool {
-        fn rec(p: &[char], t: &[char]) -> bool {
-            match (p.first(), t.first()) {
-                (None, None) => true,
-                (Some('*'), _) => rec(&p[1..], t) || (!t.is_empty() && rec(p, &t[1..])),
-                (Some('?'), Some(_)) => rec(&p[1..], &t[1..]),
-                (Some(a), Some(b)) => a == b && rec(&p[1..], &t[1..]),
-                _ => false,
-            }
-        }
         let p: Vec<char> = pattern.to_lowercase().chars().collect();
         let t: Vec<char> = text.to_lowercase().chars().collect();
-        rec(&p, &t)
+        let (mut pi, mut ti) = (0usize, 0usize);
+        let mut star: Option<(usize, usize)> = None;
+        while ti < t.len() {
+            if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+                pi += 1;
+                ti += 1;
+            } else if pi < p.len() && p[pi] == '*' {
+                star = Some((pi, ti));
+                pi += 1;
+            } else if let Some((sp, st)) = star {
+                pi = sp + 1;
+                ti = st + 1;
+                star = Some((sp, st + 1));
+            } else {
+                return false;
+            }
+        }
+        while pi < p.len() && p[pi] == '*' {
+            pi += 1;
+        }
+        pi == p.len()
     }
 
     fn block_matches(patterns: &[String], host: &str) -> bool {
@@ -211,6 +223,7 @@ pub mod ssh_config {
         expand: &dyn Fn(&str) -> Vec<String>,
         depth: u32,
         in_match: &mut bool,
+        budget: &mut u32,
     ) {
         for line in text.lines() {
             let Some((kw, args)) = split_line(line) else { continue };
@@ -226,8 +239,14 @@ pub mod ssh_config {
                 "include" if depth < 8 => {
                     for pattern in &args {
                         for file in expand(pattern) {
+                            // At most 256 included files in all (a file including itself through
+                            // a wildcard would otherwise multiply at every level)
+                            if *budget == 0 {
+                                return;
+                            }
+                            *budget -= 1;
                             if let Some(inner) = load(&file) {
-                                collect(&inner, blocks, load, expand, depth + 1, in_match);
+                                collect(&inner, blocks, load, expand, depth + 1, in_match, budget);
                             }
                         }
                     }
@@ -266,7 +285,7 @@ pub mod ssh_config {
     pub fn parse(text: &str, env: &Env) -> (Vec<ImportCandidate>, Vec<String>) {
         let mut blocks = Vec::new();
         let mut in_match = false;
-        collect(text, &mut blocks, env.load, env.expand, 0, &mut in_match);
+        collect(text, &mut blocks, env.load, env.expand, 0, &mut in_match, &mut 256);
         let mut warnings = Vec::new();
 
         // Concrete aliases (no wildcards, not negated), in file order
@@ -660,6 +679,34 @@ pub mod winscp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_config_include_loop_is_bounded() {
+        // "Include *" matching the file itself: without a budget 3 files would multiply at every level
+        let loads = std::cell::Cell::new(0u32);
+        let load = |_: &str| -> Option<String> {
+            loads.set(loads.get() + 1);
+            Some("Include *\nHost h\n  HostName x\n".into())
+        };
+        let expand = |_: &str| vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let env = ssh_config::Env { home: "/home/u", local_user: "u", load: &load, expand: &expand };
+        let (c, _) = ssh_config::parse("Include *\n", &env);
+        assert!(loads.get() <= 256, "{}", loads.get());
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn ssh_config_glob_is_fast() {
+        let t0 = std::time::Instant::now();
+        let text = format!("Host *a*a*a*a*a*a*a*a*a*a*a*b\n  User x\nHost {}\n  HostName y\n", "a".repeat(60));
+        let load = |_: &str| -> Option<String> { None };
+        let expand = |_: &str| Vec::new();
+        let env = ssh_config::Env { home: "/home/u", local_user: "u", load: &load, expand: &expand };
+        let (c, _) = ssh_config::parse(&text, &env);
+        assert_eq!(c.len(), 1);
+        assert_ne!(c[0].username, "x"); // the pattern needs a final "b"
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1));
+    }
 
     #[test]
     fn ssh_config_parsing() {

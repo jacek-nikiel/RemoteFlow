@@ -9,6 +9,13 @@ Wersja jest zapisana w trzech plikach, które muszą być zgodne (pilnuje tego t
 Każde wydanie ma sekcję dla tej samej wersji (`## X.Y.Z – …`) w tym pliku i w angielskim `CHANGELOG.md`; obie trafiają do opisu
 wydania, a okienko aktualizacji w programie pokazuje tę w języku interfejsu.
 
+## Niewydane (trafi do kolejnej wersji)
+
+### Poprawione
+- **Serwer pośredniczący, który pyta o hasło lub hasło klucza przy łączeniu** – czytelny komunikat mówi, by zapisać je w ustawieniach serwera pośredniczącego (wcześniej ogólny błąd logowania).
+- **Pole serwera pośredniczącego**: ponowne otwarcie listy po wyszukiwaniu podświetla aktualny wybór; błąd SSH pokazany z komunikatu stanu nie powtarza się po zmianie języka.
+- **Import z `~/.ssh/config`**: plik dołączający sam siebie przez wzorzec (`Include *`) i wzorce hostów z wieloma `*` nie mogą już zawiesić odczytu.
+
 ## 1.19.0 – serwer pośredniczący (jump host) dla SSH i RDP, klucze PuTTY .ppk, import z OpenSSH/PuTTY/WinSCP, klucze FIDO2 przez agenta SSH
 
 ### Dodane

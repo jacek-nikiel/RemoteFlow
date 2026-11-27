@@ -9,6 +9,13 @@ The version is kept in three files that must match (checked by the `version_test
 Each release has a section for the same version (`## X.Y.Z – …`) in this file and in `CHANGELOG.pl.md`; both go into the
 release notes, and the in-app update notice shows the one in the interface language.
 
+## Unreleased
+
+### Fixed
+- **Jump host that asks for its password or key passphrase when connecting** – a clear message says to save it in the jump host's settings (before: a general login error).
+- **Jump host field**: opening the list again after a search highlights the current choice; an SSH error shown from the status message is not repeated after a language switch.
+- **Import from `~/.ssh/config`**: a file that includes itself through a wildcard (`Include *`) and host patterns with many `*` can no longer make the scan hang.
+
 ## 1.19.0 – jump host for SSH and RDP, PuTTY .ppk keys, import from OpenSSH/PuTTY/WinSCP, FIDO2 keys via the SSH agent
 
 ### Added

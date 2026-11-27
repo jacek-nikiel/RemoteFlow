@@ -24,6 +24,17 @@ pub fn is_putty_key(text: &str) -> bool {
     text.trim_start().starts_with("PuTTY-User-Key-File-")
 }
 
+/// The key text is encrypted (needs a passphrase): OpenSSH, PuTTY (.ppk) or old PEM keys.
+pub fn key_needs_passphrase(text: &str) -> bool {
+    if crate::session::ppk::is_ppk(text) {
+        return crate::session::ppk::is_encrypted(text);
+    }
+    if is_openssh_key(text) {
+        return PrivateKey::from_openssh(text.replace('\r', "").trim()).is_ok_and(|k| k.is_encrypted());
+    }
+    text.contains("ENCRYPTED")
+}
+
 /// Explains a key the program cannot use (or None). PuTTY keys (.ppk) are converted (ppk.rs);
 /// only formats PuTTY itself would not open are refused.
 pub fn unsupported_format_message(text: &str) -> Option<String> {
@@ -203,5 +214,8 @@ mod tests {
         assert!(unsupported_format_message("PuTTY-User-Key-File-3: ssh-ed25519\n").is_none());
         assert!(unsupported_format_message("PuTTY-User-Key-File-1: ssh-rsa\n").is_some());
         assert!(unsupported_format_message(&text).is_none());
+        assert!(key_needs_passphrase(&text));
+        assert!(key_needs_passphrase("PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: aes256-cbc\n"));
+        assert!(!key_needs_passphrase("PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n"));
     }
 }
