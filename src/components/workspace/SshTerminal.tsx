@@ -359,6 +359,7 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
     if (isTauri()) {
       // Real Tauri SSH live stream
       listen<string>(`ssh-data-${session.sessionId}`, (event) => {
+        recentOutputRef.current = (recentOutputRef.current + event.payload).slice(-4096);
         term.write(event.payload);
       }).then((unsub) => {
         unlisten = unsub;
@@ -480,6 +481,26 @@ export const SshTerminal: React.FC<Props> = ({ session, isActive, splitLayout = 
   // history, and often with mouse reporting on – the wheel then went to the dead session instead
   // of scrolling. Return the terminal to the normal screen with the earlier output.
   const prevStatusRef = useRef(session.status);
+  // Recent output from the backend. A connection refused at once can fail before the listener
+  // is registered – its error line is lost and is then written here from the status message.
+  const recentOutputRef = useRef('');
+  const errorShownRef = useRef(false);
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || session.status !== 'error' || !session.statusMessage || errorShownRef.current) return;
+    errorShownRef.current = true;
+    // Give a late listener a moment: if the backend's own error line arrives, do not repeat it
+    const timer = setTimeout(() => {
+      const message = session.statusMessage || '';
+      if (recentOutputRef.current.includes(message.split('\n')[0].slice(0, 60))) return;
+      const msg = message.replace(/\r?\n/g, '\r\n');
+      term.write(`\r\n\x1b[1;31m[${t('RemoteFlow Błąd SSH')}]\x1b[0m ${msg}\r\n`);
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      errorShownRef.current = false;
+    };
+  }, [session.status, session.statusMessage, t]);
   useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = session.status;

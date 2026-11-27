@@ -55,6 +55,8 @@ export interface Connection {
   /** SSH certificate file, read at every connection (takes precedence over certificateContent). */
   certificateFilePath?: string | null;
   promptKeyPassphrase?: boolean;
+  /** SSH: saved SSH connection used as a jump host (ProxyJump). */
+  jumpHostId?: string | null;
   portForwarding: PortForwardRule[];
   rdpSettings?: RdpSettings;
   tags: string[];
@@ -153,6 +155,31 @@ export interface UiSettings {
   terminalScrollback?: number;
   /** Open the tabs from the last run after unlocking (off by default). */
   restoreSessions?: boolean;
+}
+
+/** A connection found in OpenSSH / PuTTY / WinSCP (Import window). */
+export interface ImportCandidate {
+  key: string;
+  name: string;
+  folder: string[];
+  protocol: ProtocolType;
+  host: string;
+  port: number;
+  username: string;
+  keyFile?: string | null;
+  jump?: string | null;
+  forwards: PortForwardRule[];
+  hasPassword: boolean;
+  notes: string[];
+  exists: boolean;
+  implicit: boolean;
+}
+
+export interface ImportScan {
+  scanId: string;
+  location: string;
+  candidates: ImportCandidate[];
+  warnings: string[];
 }
 
 /** Tabs kept for "Restore previous sessions". */

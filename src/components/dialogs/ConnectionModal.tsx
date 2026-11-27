@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { jumpChain, jumpHostCandidates } from '../../utils/jumpHosts';
 import {
   X,
   Terminal,
@@ -27,6 +28,7 @@ import {
 import { normalizeRdpIdentity, rdpLoginLabel } from '../../utils/rdpIdentity';
 import { useT } from '../../i18n';
 import { SshKeyFields } from './SshKeyFields';
+import { JumpHostPicker } from './JumpHostPicker';
 import { clampTyped, isValidPort, isValidRdpSize, MAX_PORT, MAX_RDP_SIZE, MIN_RDP_SIZE } from '../../utils/numberInput';
 
 interface Props {
@@ -41,6 +43,8 @@ interface Props {
   onCreateGroup?: (group: Group) => Promise<Group>;
   /** New connection pre-filled from a quick connection ("Save in the vault" on its tab). */
   draft?: Partial<Connection> | null;
+  /** Saved connections – the jump host choice. */
+  connections?: Connection[];
 }
 
 export const ConnectionModal: React.FC<Props> = ({
@@ -53,6 +57,7 @@ export const ConnectionModal: React.FC<Props> = ({
   defaultGroupId,
   onCreateGroup,
   draft,
+  connections = [],
 }) => {
   const t = useT();
   const [activeTab, setActiveTab] = useState<'general' | 'auth' | 'tunnels' | 'rdp' | 'notes'>('general');
@@ -70,6 +75,7 @@ export const ConnectionModal: React.FC<Props> = ({
   const [protocol, setProtocol] = useState<ProtocolType>('ssh');
   const [host, setHost] = useState('');
   const [port, setPort] = useState<number>(22);
+  const [jumpHostId, setJumpHostId] = useState<string>('');
   const [username, setUsername] = useState('');
 
   // Password & credentials
@@ -115,6 +121,7 @@ export const ConnectionModal: React.FC<Props> = ({
       setProtocol(editingConnection.protocol);
       setHost(editingConnection.host);
       setPort(editingConnection.port);
+      setJumpHostId(editingConnection.jumpHostId || '');
       setUsername(editingConnection.username);
       setSshAuthType(editingConnection.sshAuthType);
       setPassword(''); // keep blank unless user types new one or reveals
@@ -150,6 +157,7 @@ export const ConnectionModal: React.FC<Props> = ({
       setProtocol('ssh');
       setHost('');
       setPort(22);
+      setJumpHostId('');
       setUsername('root');
       setPassword('');
       setShowPassword(false);
@@ -187,6 +195,17 @@ export const ConnectionModal: React.FC<Props> = ({
     setIsAddingGroup(false);
     setGroupError(null);
   }, [editingConnection, defaultGroupId, isOpen, draft]);
+
+  const selfId = editingConnection?.id ?? null;
+  const jumpCandidates = useMemo(() => jumpHostCandidates(connections, selfId), [connections, selfId]);
+  // "this computer → bastion2 → bastion1 → target" for the hint under the field
+  const jumpPath = useMemo(() => {
+    if (!jumpHostId) return '';
+    const first = connections.find((c) => c.id === jumpHostId);
+    if (!first) return '';
+    const chain = [first, ...jumpChain(connections, first)].reverse();
+    return [t('ten komputer'), ...chain.map((c) => c.name), name.trim() || host.trim() || t('cel')].join(' → ');
+  }, [jumpHostId, connections, name, host, t]);
 
   const handleCreateGroup = async () => {
     if (!onCreateGroup) return;
@@ -325,6 +344,7 @@ export const ConnectionModal: React.FC<Props> = ({
         certificateFilePath: (certInputMode === 'file' && certFilePath.trim()) || undefined,
         keyFilePath: (keyInputMode === 'file' && keyFilePath.trim()) || undefined,
         promptKeyPassphrase: Boolean(promptKeyPassphrase),
+        jumpHostId: jumpHostId || undefined,
         portForwarding,
         rdpSettings: protocol === 'rdp' ? {
           width: rdpWidth,
@@ -643,6 +663,28 @@ export const ConnectionModal: React.FC<Props> = ({
                     />
                   </div>
                 </div>
+
+                {(
+                  <div>
+                    <label htmlFor="conn-jump-host" className="block text-xs font-semibold text-slate-300">
+                      {t('Serwer pośredniczący (jump host)')}
+                    </label>
+                    <JumpHostPicker
+                      id="conn-jump-host"
+                      value={jumpHostId}
+                      onChange={setJumpHostId}
+                      candidates={jumpCandidates}
+                      groups={groups}
+                    />
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      {jumpPath
+                        ? t('Droga: {path}', { path: jumpPath })
+                        : protocol === 'rdp'
+                          ? t('Pulpit zdalny przez tunel SSH: połączenie idzie przez wybrany zapisany serwer SSH (bastion), który używa swoich danych logowania.')
+                          : t('Jak ssh -J: połączenie idzie przez wybrany zapisany serwer SSH (bastion), który używa swoich danych logowania.')}
+                    </p>
+                  </div>
+                )}
 
                 {protocol === 'ssh' ? (
                   /* SFTP start folders (per connection) */

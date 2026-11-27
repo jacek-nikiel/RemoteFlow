@@ -17,6 +17,8 @@ pub struct RdpConnectionConfig {
     /// Linux/X11: draw the session inside this native window of RemoteFlow (FreeRDP
     /// `/parent-window`) instead of a separate window.
     pub embed: Option<EmbedTarget>,
+    /// Jump host (SSH): the client connects to a local port that leads through it.
+    pub jump: Option<Box<crate::session::ssh::JumpHost>>,
 }
 
 /// The password is wiped from memory when the config is dropped.
@@ -171,6 +173,36 @@ pub fn spawn_rdp_session(
 
         emit_log(tr!("✓ Wykryto klienta RDP: {}", "✓ RDP client found: {}", binary));
 
+        // Through a jump host: a local port (kept open for the life of this thread) leads there
+        let mut _jump_forward = None;
+        let (dial_host, dial_port) = match &config.jump {
+            Some(jump) => {
+                let log_app = app.clone();
+                let log_event = format!("rdp-data-{}", sid);
+                let report: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |m: String| {
+                    let _ = log_app.emit(&log_event, format!("❌ {}", m));
+                });
+                match crate::session::jump::forward((**jump).clone(), config.host.clone(), config.port, report) {
+                    Ok(f) => {
+                        emit_log(tr!(
+                            "↪ Przez serwer pośredniczący „{}” (lokalny port {})",
+                            "↪ Through the jump host “{}” (local port {})",
+                            jump.name, f.port
+                        ));
+                        let port = f.port;
+                        _jump_forward = Some(f);
+                        ("127.0.0.1".to_string(), port)
+                    }
+                    Err(e) => {
+                        emit_log(format!("❌ {}", e));
+                        let _ = app.emit(&format!("rdp-status-{}", sid), "error");
+                        return;
+                    }
+                }
+            }
+            None => (config.host.clone(), config.port),
+        };
+
         let mut cmd = Command::new(&binary);
         // FreeRDP drawing inside the RemoteFlow window cannot outlive it: if RemoteFlow ends
         // without closing the tab (crash, kill), the kernel ends FreeRDP too. The spawning thread
@@ -191,7 +223,7 @@ pub fn spawn_rdp_session(
         let mut stdin_password: Option<String> = None;
 
         if binary.contains("freerdp") {
-            cmd.arg(format!("/v:{}", crate::session::host_port(&config.host, config.port)));
+            cmd.arg(format!("/v:{}", crate::session::host_port(&dial_host, dial_port)));
             if !rdp_user.is_empty() {
                 cmd.arg(format!("/u:{}", rdp_user));
             }
@@ -215,7 +247,8 @@ pub fn spawn_rdp_session(
             // to it from the start instead of keeping its own, separate TOFU store.
             let mut pinned = config.certificate_fingerprint.clone();
             if pinned.is_none() {
-                match tauri::async_runtime::block_on(crate::session::rdp_proxy::probe_certificate(&config.host, config.port)) {
+                let jump = config.jump.as_deref().cloned();
+                match tauri::async_runtime::block_on(crate::session::rdp_proxy::probe_certificate(&config.host, config.port, jump)) {
                     Ok(fingerprint) => {
                         let verifier = crate::session::make_host_verifier(&app, "rdp", config.host.clone(), config.port);
                         match (verifier.0)(&fingerprint) {
@@ -289,7 +322,7 @@ pub fn spawn_rdp_session(
             // mstsc has no command line switch for the user name: a temporary .rdp file pre-fills
             // DOMAIN\user in the login prompt (the password is never written to disk).
             let clipboard = config.rdp_settings.as_ref().is_none_or(|s| s.clipboard);
-            match write_mstsc_rdp_file(&sid, &config.host, config.port, &display_rdp_login(&rdp_user, rdp_domain.as_deref()), clipboard) {
+            match write_mstsc_rdp_file(&sid, &dial_host, dial_port, &display_rdp_login(&rdp_user, rdp_domain.as_deref()), clipboard) {
                 Ok(path) => {
                     cmd.arg(&path);
                     let cleanup = path.clone();
@@ -300,7 +333,7 @@ pub fn spawn_rdp_session(
                 }
                 Err(e) => {
                     emit_log(tr!("⚠️ Nie udało się przygotować pliku .rdp ({}), użytkownik nie zostanie podpowiedziany.", "⚠️ Could not prepare the .rdp file ({}), the user name will not be pre-filled.", e));
-                    cmd.arg(format!("/v:{}", crate::session::host_port(&config.host, config.port)));
+                    cmd.arg(format!("/v:{}", crate::session::host_port(&dial_host, dial_port)));
                 }
             }
         }

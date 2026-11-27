@@ -64,6 +64,42 @@ export const SshKeyFields: React.FC<SshKeyFieldsProps> = ({
   const [certFileSuccess, setCertFileSuccess] = useState<string | null>(null);
   const certFileInputRef = useRef<HTMLInputElement>(null);
 
+  // PuTTY key: converted automatically when connecting; can also be saved as an OpenSSH file
+  const isPpk = privateKey.trimStart().startsWith('PuTTY-User-Key-File-');
+  const [ppkSaving, setPpkSaving] = useState(false);
+  const [ppkSaved, setPpkSaved] = useState<string | null>(null);
+  const saveAsOpenssh = async () => {
+    setPpkSaving(true);
+    setError(null);
+    try {
+      const path = await api.ppkSaveAsOpenssh(privateKey, passphrase);
+      if (path) setPpkSaved(path);
+    } catch (err: any) {
+      setError(String(err?.message || err));
+    } finally {
+      setPpkSaving(false);
+    }
+  };
+  const ppkNotice = isPpk ? (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200">
+      <span className="min-w-0 flex-1">
+        {ppkSaved
+          ? t('Zapisano klucz OpenSSH: {path}', { path: ppkSaved })
+          : t('Klucz PuTTY (.ppk) – zostanie skonwertowany automatycznie przy łączeniu (zaszyfrowany wymaga hasła klucza).')}
+      </span>
+      {isTauri() && (
+        <button
+          type="button"
+          onClick={saveAsOpenssh}
+          disabled={ppkSaving}
+          className="shrink-0 rounded border border-amber-400/40 px-2 py-0.5 text-amber-100 hover:bg-amber-500/20 disabled:opacity-50"
+        >
+          {t('Zapisz jako OpenSSH…')}
+        </button>
+      )}
+    </div>
+  ) : null;
+
   const handlePickKeyFile = async () => {
     if (!isTauri()) {
       fileInputRef.current?.click();
@@ -265,12 +301,13 @@ export const SshKeyFields: React.FC<SshKeyFieldsProps> = ({
                     <span>{t('Zapisana treść klucza w sejfie: {n} bajtów', { n: privateKey.length })}</span>
                   </div>
                 )}
+                {ppkNotice}
               </div>
             ) : (
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] text-slate-400">
-                    {t('Wklej treść klucza (OpenSSH / PEM / Ed25519)')}
+                    {t('Wklej treść klucza (OpenSSH / PEM / PuTTY .ppk)')}
                   </span>
                   <button
                     type="button"
@@ -292,6 +329,7 @@ export const SshKeyFields: React.FC<SshKeyFieldsProps> = ({
                   placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
                   className="w-full rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 font-mono text-[11px] text-white placeholder-slate-600 focus:border-cyan-500 focus:outline-hidden"
                 />
+                {ppkNotice}
               </div>
             )}
           </div>

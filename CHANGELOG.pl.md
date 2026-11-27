@@ -9,6 +9,20 @@ Wersja jest zapisana w trzech plikach, które muszą być zgodne (pilnuje tego t
 Każde wydanie ma sekcję dla tej samej wersji (`## X.Y.Z – …`) w tym pliku i w angielskim `CHANGELOG.md`; obie trafiają do opisu
 wydania, a okienko aktualizacji w programie pokazuje tę w języku interfejsu.
 
+## 1.19.0 – serwer pośredniczący (jump host) dla SSH i RDP, klucze PuTTY .ppk, import z OpenSSH/PuTTY/WinSCP, klucze FIDO2 przez agenta SSH
+
+### Dodane
+- **Serwer pośredniczący (jump host, ProxyJump – jak `ssh -J`):** połączenie SSH może iść przez inne zapisane połączenie SSH (bastion), które loguje się swoimi danymi. Działają łańcuchy (A przez B przez C); pętla albo serwer pośredniczący inny niż SSH są odrzucane przy zapisie. Formularz pokazuje drogę (ten komputer → bastion → cel). Terminal, SFTP i tunele idą przez serwer pośredniczący. Usunięcie połączenia używanego przez inne jako jump host sprawia, że łączą się one bezpośrednio (potwierdzenie mówi które).
+- **RDP przez serwer pośredniczący (tunel SSH):** to samo pole w połączeniach RDP. Wbudowany klient łączy się bezpośrednio przez kanał bastionu (bez otwartego portu lokalnego); FreeRDP i mstsc dostają lokalny port na 127.0.0.1 prowadzący przez bastion. Certyfikat serwera pozostaje przypisany do prawdziwego adresu serwera.
+- **Klucze bezpieczeństwa FIDO2 / U2F (YubiKey, `sk-ssh-ed25519`, `sk-ecdsa-sha2-nistp256`) przez agenta SSH:** przy logowaniu *Agent SSH* działają klucze trzymane przez agenta OpenSSH (Windows 10/11 albo Linux); terminal prosi o dotknięcie klucza. libssh2 gubił część podpisu klucza bezpieczeństwa (flagi i licznik), przez co serwer odrzucał logowanie – teraz te klucze są podpisywane bezpośrednio przez agenta.
+- **Klucze PuTTY (.ppk) działają bezpośrednio:** format 2 i 3, RSA, Ed25519 i ECDSA, także zaszyfrowane (używane jest hasło klucza). Klucz jest konwertowany do OpenSSH w pamięci przy każdym połączeniu – plik zostaje bez zmian. **Zapisz jako OpenSSH…** w polach klucza zapisuje skonwertowaną kopię (z tym samym hasłem).
+- **Import z OpenSSH, PuTTY i WinSCP** (Import / Eksport → OpenSSH / PuTTY / WinSCP): `~/.ssh/config` (Host, HostName, User, Port, IdentityFile, ProxyJump / `ProxyCommand ssh -W`, Local/Remote/DynamicForward, Include, ustawienia z wzorców `*`), sesje PuTTY (rejestr Windows, `~/.putty/sessions` albo plik .reg; klucze i tunele) oraz witryny WinSCP (rejestr, WinSCP.ini albo plik .reg; foldery, zapisane hasła, tunel SSH jako jump host). Lista z polami wyboru; wpisy już obecne w sejfie są oznaczone i niezaznaczone; folder docelowy albo nowy. Hasła odczytane z WinSCP nie przechodzą przez interfejs – są od razu szyfrowane kluczem sejfu.
+- **Wyszukiwanie na liście serwerów pośredniczących**: pole jump host ma wyszukiwarkę (nazwa, adres, użytkownik, folder, tagi) i obsługę klawiaturą – wygodne przy wielu serwerach.
+
+### Poprawione
+- **Błąd SSH, który przychodzi od razu** (np. odrzucone połączenie), znowu jest widoczny w terminalu – wcześniej karta tylko robiła się czerwona.
+- **Kopiowanie hasła ze struktury połączeń** działa teraz jak z karty: komunikat potwierdza skopiowanie, hasło znika ze schowka po 30 sekundach i (Windows) nie trafia do historii schowka. Kopiowanie loginu też pokazuje potwierdzenie.
+
 ## 1.18.0 – paleta poleceń i szybkie połączenie, zmiana nazwy/przenoszenie/uprawnienia w SFTP, przywracanie sesji
 
 ### Dodane

@@ -220,6 +220,7 @@ mod tests {
             auth_type: "password".into(), certificate: None, host: "127.0.0.1".into(), port: 2224,
             username: "rftest".into(), password: Some("x".into()), private_key: None, passphrase: None,
             host_key_verifier: HostKeyVerifier(std::sync::Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         };
         let err = ssh_connect_raw(&cfg).err().expect("handshake must fail");
         eprintln!("{err}");

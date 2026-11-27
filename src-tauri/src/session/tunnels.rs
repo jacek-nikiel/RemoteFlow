@@ -368,7 +368,7 @@ fn socks_handshake(stream: &mut TcpStream) -> Option<(String, u16)> {
 }
 
 /// One forwarded connection: a TCP socket and an SSH channel, both non-blocking.
-struct Conn {
+pub(crate) struct Conn {
     /// Index in `TunnelsStatus::tunnels`
     tunnel: usize,
     tcp: TcpStream,
@@ -388,13 +388,13 @@ struct Conn {
     finished_at: Option<Instant>,
 }
 
-enum Pump {
+pub(crate) enum Pump {
     Idle,
     Active,
 }
 
 impl Conn {
-    fn new(tcp: TcpStream, ch: ssh2::Channel, tunnel: usize) -> Self {
+    pub(crate) fn new(tcp: TcpStream, ch: ssh2::Channel, tunnel: usize) -> Self {
         let _ = tcp.set_nonblocking(true);
         let _ = tcp.set_nodelay(true);
         Conn {
@@ -414,7 +414,7 @@ impl Conn {
         }
     }
 
-    fn done(&self) -> bool {
+    pub(crate) fn done(&self) -> bool {
         if self.failed {
             return true;
         }
@@ -429,7 +429,7 @@ impl Conn {
     }
 
     /// Moves as much data as possible in both directions without blocking.
-    fn pump(&mut self, buf: &mut [u8]) -> Result<Pump, ()> {
+    pub(crate) fn pump(&mut self, buf: &mut [u8]) -> Result<Pump, ()> {
         let mut active = false;
 
         // TCP client -> channel
@@ -1003,6 +1003,7 @@ mod tunnel_e2e {
             private_key: None,
             passphrase: None,
             host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         }
     }
 

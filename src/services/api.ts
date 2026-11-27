@@ -15,7 +15,7 @@ export interface RdpCertificateInfo {
   fingerprint: string;
   previousFingerprint: string | null;
 }
-import { BackupEntry, BackupSettings, SavedWorkspace, UiSettings, TransferSummary, SftpFileEntry, Connection, Credential, Group, ImportSummary, KnownHostEntry, SessionInfo, SftpListResponse, VaultData, VaultStatus } from '../types';
+import { BackupEntry, BackupSettings, ImportScan, SavedWorkspace, UiSettings, TransferSummary, SftpFileEntry, Connection, Credential, Group, ImportSummary, KnownHostEntry, SessionInfo, SftpListResponse, VaultData, VaultStatus } from '../types';
 
 export const isTauri = () => {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -584,6 +584,15 @@ export const api = {
     };
   },
 
+  /** Reads connections of OpenSSH / PuTTY / WinSCP (`pick`: choose the file); null = cancelled. */
+  async importScan(source: 'ssh_config' | 'putty' | 'winscp', pick: boolean): Promise<ImportScan | null> {
+    return await invoke<ImportScan | null>('import_scan', { source, pick });
+  },
+
+  async importApply(scanId: string, keys: string[], groupId: string | null, newGroup: string | null): Promise<{ connections: number; groups: number; passwords: number }> {
+    return await invoke('import_apply', { scanId, keys, groupId, newGroup });
+  },
+
   async batchImport(
     groups: Group[],
     connections: Connection[],
@@ -963,6 +972,11 @@ export const api = {
    * Saves a file where the user chooses in the native "Save as" dialog. Returns the path, or null
    * when cancelled. Outside the app (browser preview) falls back to a regular download.
    */
+  /** PuTTY key (.ppk) converted to OpenSSH (same passphrase) and saved where the user chooses. */
+  async ppkSaveAsOpenssh(content: string, passphrase: string): Promise<string | null> {
+    return await invoke<string | null>('ppk_save_as_openssh', { content, passphrase: passphrase || null });
+  },
+
   async saveFileAs(defaultName: string, content: string, filterName: string, extension: string): Promise<string | null> {
     if (isTauri()) {
       return await invoke<string | null>('save_file_as', { defaultName, content, filterName, extension });

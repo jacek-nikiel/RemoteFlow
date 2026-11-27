@@ -11,7 +11,9 @@ import {
   Loader2,
   Database,
   FolderOpen,
+  Terminal,
 } from 'lucide-react';
+import { ImportFromApps } from './ImportFromApps';
 import { api, MrngParams } from '../../services/api';
 import { parseMRemoteNGXml, readMRemoteNGEncryption, MRemoteNGParseResult } from '../../utils/mremoteng';
 import { tn, useT } from '../../i18n';
@@ -34,7 +36,7 @@ export const ImportExportModal: React.FC<Props> = ({
   connections,
 }) => {
   const t = useT();
-  const [activeTab, setActiveTab] = useState<'export' | 'import_rf' | 'import_mrng'>('export');
+  const [activeTab, setActiveTab] = useState<'export' | 'import_rf' | 'import_mrng' | 'import_apps'>('export');
 
   // Export state
   const [exportEncrypted, setExportEncrypted] = useState(true);
@@ -334,6 +336,20 @@ export const ImportExportModal: React.FC<Props> = ({
             <FolderOpen className="h-3.5 w-3.5 text-amber-400" />
             {t('Import z mRemoteNG (XML)')}
           </button>
+          <button
+            onClick={() => {
+              setActiveTab('import_apps');
+              setMessage(null);
+            }}
+            className={`flex items-center gap-1.5 border-b-2 py-3 px-3 transition-colors ${
+              activeTab === 'import_apps'
+                ? 'border-cyan-400 text-white font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Terminal className="h-3.5 w-3.5 text-emerald-400" />
+            {t('OpenSSH / PuTTY / WinSCP')}
+          </button>
         </div>
 
         {/* Content Area */}
@@ -356,6 +372,17 @@ export const ImportExportModal: React.FC<Props> = ({
           )}
 
           {/* TAB 1: EXPORT */}
+          {activeTab === 'import_apps' && (
+            <ImportFromApps
+              groups={groups}
+              onImported={async (text) => {
+                await onDataChanged();
+                setMessage({ text, type: 'success' });
+              }}
+              onError={(text) => setMessage({ text, type: 'error' })}
+            />
+          )}
+
           {activeTab === 'export' && (
             <form onSubmit={handleExport} className="space-y-5">
               <ExportScopeSelector groups={groups} connections={connections} value={exportScope}

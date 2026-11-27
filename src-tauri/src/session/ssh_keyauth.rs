@@ -24,13 +24,14 @@ pub fn is_putty_key(text: &str) -> bool {
     text.trim_start().starts_with("PuTTY-User-Key-File-")
 }
 
-/// Explains a key the program cannot use (or None).
+/// Explains a key the program cannot use (or None). PuTTY keys (.ppk) are converted (ppk.rs);
+/// only formats PuTTY itself would not open are refused.
 pub fn unsupported_format_message(text: &str) -> Option<String> {
-    if is_putty_key(text) {
+    if is_putty_key(text) && !text.trim_start().starts_with("PuTTY-User-Key-File-2:") && !text.trim_start().starts_with("PuTTY-User-Key-File-3:") {
         return Some(
             tr!(
-                "Klucz w formacie PuTTY (.ppk) nie jest obsługiwany. Wyeksportuj go w PuTTYgen: Conversions → Export OpenSSH key (new format) i wklej wynik.",
-                "Keys in the PuTTY format (.ppk) are not supported. Export the key in PuTTYgen: Conversions → Export OpenSSH key (new format) and paste the result."
+                "Ta wersja pliku klucza PuTTY nie jest obsługiwana. Zapisz klucz ponownie w aktualnym PuTTYgen.",
+                "This version of the PuTTY key file is not supported. Save the key again in a current PuTTYgen."
             )
             .to_string(),
         );
@@ -199,7 +200,8 @@ mod tests {
         assert_eq!(ok.public_key(), key.public_key());
         assert!(decode(&text, Some("zle")).unwrap_err().to_lowercase().contains("pass"));
         assert!(decode(&text, None).is_err());
-        assert!(unsupported_format_message("PuTTY-User-Key-File-3: ssh-ed25519\n").is_some());
+        assert!(unsupported_format_message("PuTTY-User-Key-File-3: ssh-ed25519\n").is_none());
+        assert!(unsupported_format_message("PuTTY-User-Key-File-1: ssh-rsa\n").is_some());
         assert!(unsupported_format_message(&text).is_none());
     }
 }

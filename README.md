@@ -30,7 +30,9 @@ The application uses **Tauri 2 and Rust** for the native backend, **React 19 and
 
 ### SSH
 - Built-in terminal (xterm.js) with a full 16-colour palette – `mc`, `htop` and similar tools render correctly. Adjustable history buffer (Settings → SSH terminal, default 10,000 lines), scrollable also after the connection ends.
-- Authentication with password, private key (with optional passphrase prompt), OpenSSH certificate or SSH agent. Keys in the OpenSSH format (Ed25519, ECDSA, RSA – the default of current `ssh-keygen`), also passphrase-protected, work on Windows and Linux; PuTTY `.ppk` keys must be exported to the OpenSSH format. The key and the certificate can be chosen as a file (read at every connection, so a renewed short-lived certificate is used automatically) or pasted. The method chosen in the connection is used without falling back to others; a connection without its own secret follows the method of its credential profile.
+- Authentication with password, private key (with optional passphrase prompt), OpenSSH certificate or SSH agent. Keys in the OpenSSH format (Ed25519, ECDSA, RSA – the default of current `ssh-keygen`), also passphrase-protected, work on Windows and Linux; PuTTY `.ppk` keys (formats 2 and 3, also encrypted) are converted in memory and can be saved as OpenSSH. The key and the certificate can be chosen as a file (read at every connection, so a renewed short-lived certificate is used automatically) or pasted. The method chosen in the connection is used without falling back to others; a connection without its own secret follows the method of its credential profile.
+- **Jump host (ProxyJump):** connect through another saved SSH connection (chains supported) – terminal, SFTP, tunnels and RDP connections.
+- FIDO2 / U2F security keys (YubiKey, `sk-ssh-ed25519`) through the OpenSSH agent.
 - Port forwarding: local, remote and dynamic (SOCKS5), with a tunnels list per tab (state, errors, open connections).
 - Copy/paste from the context menu and keyboard, middle-click paste of the terminal selection.
 - Drop files or folders on the terminal (or paste copied files with Ctrl+V) to upload them to the shell's current folder; progress is shown on the Files (SFTP) button.
@@ -74,6 +76,10 @@ The application uses **Tauri 2 and Rust** for the native backend, **React 19 and
 ### Import from mRemoteNG
 - Imports `confCons.xml` together with folders and **passwords** (AES-GCM and legacy AES-CBC, also fully encrypted files).
   Passwords are decrypted only in the Rust backend and immediately re-encrypted with the vault key.
+
+### Import from OpenSSH, PuTTY and WinSCP
+- `~/.ssh/config` (hosts, users, ports, keys, ProxyJump, tunnels, Include), PuTTY sessions (registry, `~/.putty` or a .reg file) and WinSCP sites (registry, WinSCP.ini or .reg – folders, passwords, the SSH tunnel as a jump host).
+- A preview with check boxes; connections already in the vault are marked. WinSCP passwords are read in the backend and encrypted with the vault key right away.
 
 ## Download
 

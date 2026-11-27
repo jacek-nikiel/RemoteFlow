@@ -82,6 +82,7 @@ fn build(protocol: &str, host: &str, port: u16, username: &str, ssh_auth_type: &
         key_file_path: None,
         certificate_file_path: None,
         prompt_key_passphrase: None,
+        jump_host_id: None,
         port_forwarding: Vec::new(),
         rdp_settings: None,
         tags: Vec::new(),

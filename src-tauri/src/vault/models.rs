@@ -108,6 +108,9 @@ pub struct Connection {
     pub certificate_file_path: Option<String>,
     #[serde(rename = "promptKeyPassphrase", default, skip_serializing_if = "Option::is_none")]
     pub prompt_key_passphrase: Option<bool>,
+    /// SSH: saved SSH connection used as a jump host (ProxyJump); None = direct connection.
+    #[serde(rename = "jumpHostId", default, skip_serializing_if = "Option::is_none")]
+    pub jump_host_id: Option<String>,
     #[serde(rename = "portForwarding")]
     pub port_forwarding: Vec<PortForwardRule>,
     #[serde(rename = "rdpSettings")]
@@ -516,5 +519,81 @@ mod saved_workspace_tests {
         // Vaults written by older versions must keep the same serialized form (integrity MAC)
         let ui = serde_json::to_string(&UiSettings::default()).unwrap();
         assert!(!ui.contains("restoreSessions"));
+    }
+}
+
+/// Checks of the "Jump host" field (ProxyJump) when a connection is saved.
+pub mod jump_hosts {
+    use super::Connection;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum JumpProblem {
+        /// The connection itself was chosen.
+        ItSelf,
+        /// The chosen connection does not exist (any more).
+        Missing,
+        /// The chosen connection is not SSH.
+        NotSsh,
+        /// Following the jump hosts comes back to this connection (or never ends).
+        Loop,
+    }
+
+    /// Problem with `conn.jump_host_id` among the saved `connections` (`conn` replaces the saved
+    /// version with the same id).
+    pub fn check(connections: &[Connection], conn: &Connection) -> Option<JumpProblem> {
+        let first = conn.jump_host_id.as_deref().filter(|id| !id.is_empty())?;
+        if first == conn.id {
+            return Some(JumpProblem::ItSelf);
+        }
+        let find = |id: &str| connections.iter().find(|c| c.id == id && c.id != conn.id);
+        let target = match find(first) {
+            Some(c) => c,
+            None => return Some(JumpProblem::Missing),
+        };
+        if target.protocol != "ssh" {
+            return Some(JumpProblem::NotSsh);
+        }
+        let mut current = target;
+        for _ in 0..16 {
+            match current.jump_host_id.as_deref().filter(|id| !id.is_empty()) {
+                None => return None,
+                Some(next) if next == conn.id => return Some(JumpProblem::Loop),
+                Some(next) => match find(next) {
+                    Some(c) => current = c,
+                    None => return None, // broken further up – reported when connecting
+                },
+            }
+        }
+        Some(JumpProblem::Loop)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn c(id: &str, protocol: &str, jump: Option<&str>) -> Connection {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": id, "groupId": null, "credentialId": null, "protocol": protocol,
+                "host": "h", "port": 22, "username": "u", "passwordEncrypted": null, "sshAuthType": "password",
+                "privateKeyEncrypted": null, "privateKeyPassphraseEncrypted": null, "certificateContent": null,
+                "jumpHostId": jump, "portForwarding": [], "rdpSettings": null, "tags": [], "notes": null,
+                "createdAt": "", "updatedAt": ""
+            }))
+            .unwrap()
+        }
+
+        #[test]
+        fn detects_problems() {
+            let saved = vec![c("a", "ssh", None), c("b", "ssh", Some("a")), c("r", "rdp", None), c("x", "ssh", Some("y"))];
+            assert_eq!(check(&saved, &c("n", "ssh", None)), None);
+            assert_eq!(check(&saved, &c("n", "ssh", Some("b"))), None);
+            assert_eq!(check(&saved, &c("n", "ssh", Some("n"))), Some(JumpProblem::ItSelf));
+            assert_eq!(check(&saved, &c("n", "ssh", Some("zz"))), Some(JumpProblem::Missing));
+            assert_eq!(check(&saved, &c("n", "ssh", Some("r"))), Some(JumpProblem::NotSsh));
+            // a -> b while b -> a
+            assert_eq!(check(&saved, &c("a", "ssh", Some("b"))), Some(JumpProblem::Loop));
+            // broken further up is not a save error
+            assert_eq!(check(&saved, &c("n", "ssh", Some("x"))), None);
+        }
     }
 }

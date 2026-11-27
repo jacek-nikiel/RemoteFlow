@@ -28,6 +28,16 @@ pub struct SshConnectionConfig {
     pub passphrase: Option<String>,
     /// Mandatory: the server's host key is verified BEFORE any credentials are sent.
     pub host_key_verifier: HostKeyVerifier,
+    /// Jump host (ProxyJump): the connection is made through this server (which may itself
+    /// have a jump host). Its name is shown in errors.
+    pub jump: Option<Box<JumpHost>>,
+}
+
+/// A saved SSH connection used as a jump host.
+#[derive(Clone, Debug)]
+pub struct JumpHost {
+    pub name: String,
+    pub config: SshConnectionConfig,
 }
 
 /// Secrets are wiped from memory when a config (or any clone of it) is dropped.
@@ -48,6 +58,7 @@ impl std::fmt::Debug for SshConnectionConfig {
             .field("host", &self.host)
             .field("port", &self.port)
             .field("username", &self.username)
+            .field("jump", &self.jump.as_ref().map(|j| j.name.as_str()))
             .finish_non_exhaustive()
     }
 }
@@ -197,7 +208,11 @@ pub fn ssh_connect_raw(config: &SshConnectionConfig) -> Result<ssh2::Session, St
     let mut tcp_stream = None;
     let mut connected_addr = None;
 
-    if let Ok(addrs) = (host, config.port).to_socket_addrs() {
+    if let Some(jump) = &config.jump {
+        // Through the jump host: a channel to host:port on it, joined to a local socket that
+        // this session uses like a TCP connection (see jump.rs)
+        tcp_stream = Some(crate::session::jump::connect_via(jump, host, config.port)?);
+    } else if let Ok(addrs) = (host, config.port).to_socket_addrs() {
         for addr in addrs {
             if let Ok(stream) = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(4)) {
                 let _ = stream.set_nodelay(true);
@@ -271,7 +286,11 @@ pub fn ssh_connect_raw(config: &SshConnectionConfig) -> Result<ssh2::Session, St
             if let Some(msg) = crate::session::ssh_keyauth::unsupported_format_message(key_text) {
                 return Err(msg);
             }
-            if crate::session::ssh_keyauth::is_openssh_key(key_text) {
+            if crate::session::ppk::is_ppk(key_text) {
+                // PuTTY key (.ppk): converted to OpenSSH in memory – the file stays as it is
+                let converted = crate::session::ppk::to_openssh(key_text, passphrase, None).map_err(|e| e.message())?;
+                crate::session::ssh_keyauth::authenticate(&sess, &config.username, &converted, None, certificate)?;
+            } else if crate::session::ssh_keyauth::is_openssh_key(key_text) {
                 // OpenSSH format (default of current ssh-keygen): decoded in Rust – works on
                 // Windows too (WinCNG cannot read it) and reports a wrong passphrase clearly.
                 crate::session::ssh_keyauth::authenticate(&sess, &config.username, key_text, passphrase, certificate)?;
@@ -305,7 +324,8 @@ pub fn ssh_connect_raw(config: &SshConnectionConfig) -> Result<ssh2::Session, St
     }
 
     if config.auth_type == "agent" {
-        let _ = sess.userauth_agent(&config.username);
+        // Also FIDO2 security keys (sk-…) held by the agent – see agent.rs
+        crate::session::agent::authenticate(&sess, &config.username)?;
     }
 
     if !sess.authenticated() {
@@ -385,6 +405,12 @@ pub fn spawn_ssh_session(
     std::thread::spawn(move || {
         let data_app = app.clone();
         let data_event = format!("ssh-data-{}", session_id);
+        let notice_app = app.clone();
+        let notice_event = data_event.clone();
+        let notice: crate::session::agent::Notice = Arc::new(move |text: String| {
+            let _ = notice_app.emit(&notice_event, text);
+        });
+        NEXT_NOTICE.with(|n| *n.borrow_mut() = Some(notice));
         run_ssh_worker(
             config,
             cmd_rx,
@@ -398,13 +424,20 @@ pub fn spawn_ssh_session(
     });
 }
 
+thread_local! {
+    /// Notice target (the tab's terminal) handed to the login thread of this worker.
+    static NEXT_NOTICE: std::cell::RefCell<Option<crate::session::agent::Notice>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Connection attempt with an overall time limit. libssh2 timeouts cover waiting for the
 /// network, not every step (e.g. key handling in the crypto backend); if the attempt does not
 /// finish, the tab gets an error instead of staying in "connecting" forever. The abandoned
 /// attempt ends on its own; its result is dropped.
 fn connect_with_deadline(config: SshConnectionConfig) -> Result<ssh2::Session, String> {
     let (tx, rx) = std::sync::mpsc::channel();
+    let notice = NEXT_NOTICE.with(|n| n.borrow().clone());
     std::thread::spawn(move || {
+        crate::session::agent::set_notice(notice);
         let _ = tx.send(ssh_connect_raw(&config));
     });
     let limit = std::time::Duration::from_millis(u64::from(HANDSHAKE_TIMEOUT_MS) * 2 + 10_000);
@@ -628,7 +661,7 @@ mod handshake_timeout_tests {
         let mut cfg = SshConnectionConfig {
             auth_type: "key".into(), certificate: None, host: "localhost".into(), port: 22,
             username: "user".into(), password: Some("must not fall back".into()), private_key: None,
-            passphrase: None, host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            passphrase: None, host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))), jump: None,
         };
         assert!(validate_auth(&cfg).is_err());
         cfg.private_key = Some("private key".into());
@@ -660,6 +693,7 @@ mod handshake_timeout_tests {
             private_key: None,
             passphrase: None,
             host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         };
         let t0 = std::time::Instant::now();
         assert!(ssh_connect_raw(&cfg).is_err());
@@ -687,6 +721,7 @@ mod handshake_timeout_tests {
             private_key: None,
             passphrase: None,
             host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         };
         // TCP connects (then the silent server makes the handshake fail) – not "cannot connect"
         let err = ssh_connect_raw(&cfg).err().expect("must fail");
@@ -711,6 +746,7 @@ mod worker_e2e {
             private_key: None,
             passphrase: None,
             host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         }
     }
 
@@ -877,6 +913,7 @@ mod key_auth_e2e {
             private_key: Some(key),
             passphrase: passphrase.map(|s| s.to_string()),
             host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         }
     }
 
@@ -909,7 +946,7 @@ mod passphrase_key_tests {
                 let cfg = SshConnectionConfig {
                     auth_type: "key".into(), certificate: None, host: "127.0.0.1".into(), port: 2222,
                     username: "rftest".into(), password: None, private_key: Some(key.clone()),
-                    passphrase: Some(pass.into()), host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+                    passphrase: Some(pass.into()), host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))), jump: None,
                 };
                 let t0 = std::time::Instant::now();
                 let r = ssh_connect_raw(&cfg);
@@ -930,8 +967,27 @@ mod passphrase_key_tests {
             certificate: Some(std::fs::read_to_string("/tmp/certtest/user-cert.pub").unwrap()),
             host: "127.0.0.1".into(), port: 2223, username: "rftest".into(), password: None,
             private_key: Some(std::fs::read_to_string("/tmp/certtest/user").unwrap()),
-            passphrase: Some("Klucz-123".into()), host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            passphrase: Some("Klucz-123".into()), host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))), jump: None,
         };
         assert!(ssh_connect_raw(&cfg).unwrap().authenticated());
+    }
+}
+
+#[cfg(test)]
+mod agent_sk_tests {
+    /// Agent login with a FIDO2 key (`sk-ssh-ed25519`): run with an agent holding only such a
+    /// key (`SSH_AUTH_SOCK`) and sshd on 127.0.0.1:2222 – `cargo test --lib agent_sk -- --ignored`.
+    #[test]
+    #[ignore]
+    fn agent_sk_login() {
+        use crate::session::ssh::{HostKeyVerifier, SshConnectionConfig};
+        use crate::vault::known_hosts::HostTrust;
+        let cfg = SshConnectionConfig {
+            auth_type: "agent".into(), certificate: None, host: "127.0.0.1".into(), port: 2222, username: "rftest".into(),
+            password: None, private_key: None, passphrase: None,
+            host_key_verifier: HostKeyVerifier(std::sync::Arc::new(|_| Ok(HostTrust::Known))), jump: None,
+        };
+        let sess = crate::session::ssh::ssh_connect_raw(&cfg).unwrap();
+        assert!(sess.authenticated());
     }
 }

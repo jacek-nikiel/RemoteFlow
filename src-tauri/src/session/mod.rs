@@ -9,6 +9,9 @@ pub mod ssh_keyauth;
 pub mod transfer;
 pub mod fileops;
 pub mod adhoc;
+pub mod jump;
+pub mod agent;
+pub mod ppk;
 pub mod preview;
 pub mod localfs;
 pub mod tunnels;
@@ -455,6 +458,7 @@ pub fn session_connect(
             private_key: resolved.private_key.clone(),
             passphrase: resolved_passphrase,
             host_key_verifier: make_host_verifier(&app, "ssh", host, port),
+            jump: jump_host_chain(&auth_state, conn, &app, &mut Vec::new())?,
         };
 
         // Registered before the worker starts, so its status updates always find the session
@@ -497,6 +501,7 @@ pub fn session_connect(
         let proxy_token = random_token();
         let error_app = app.clone();
         let error_sid = session_id.clone();
+        let jump = jump_host_chain(&auth_state, conn, &app, &mut Vec::new())?.map(|j| *j);
         let proxy_res = rdp_proxy::start_rdp_proxy(
             host.clone(),
             port,
@@ -505,6 +510,7 @@ pub fn session_connect(
             Arc::new(move |msg: String| {
                 let _ = error_app.emit(&format!("rdp-proxy-error-{}", error_sid), msg);
             }),
+            jump,
         );
         let proxy_handle = proxy_res.map_err(|e| {
             eprintln!("[RemoteFlow] Błąd startu proxy RDP: {}", e);
@@ -657,7 +663,60 @@ pub fn resolve_connection_ssh_config(
         private_key: resolved.private_key,
         passphrase: resolved.passphrase,
         host_key_verifier: make_host_verifier(app, "ssh", host, port),
+        jump: jump_host_chain(auth_state, &resolved.conn, app, &mut Vec::new())?,
     })
+}
+
+/// Most jump hosts in a row (A through B through C …).
+const MAX_JUMP_HOSTS: usize = 8;
+
+/// The jump host of `conn` (and its own jump host, and so on) as connection settings.
+/// `seen`: connections already in the chain – a loop is reported instead of followed.
+pub(crate) fn jump_host_chain(
+    auth_state: &AuthState,
+    conn: &crate::vault::models::Connection,
+    app: &tauri::AppHandle,
+    seen: &mut Vec<String>,
+) -> Result<Option<Box<ssh::JumpHost>>, String> {
+    let Some(id) = conn.jump_host_id.as_deref().filter(|id| !id.is_empty()) else {
+        return Ok(None);
+    };
+    if conn.protocol != "ssh" && conn.protocol != "rdp" {
+        return Ok(None);
+    }
+    seen.push(conn.id.clone());
+    if seen.iter().any(|s| s == id) || seen.len() > MAX_JUMP_HOSTS {
+        return Err(tr!(
+            "Serwery pośredniczące (jump host) tworzą pętlę – sprawdź pole „Jump host” w połączeniach.",
+            "The jump hosts form a loop – check the “Jump host” field of the connections."
+        )
+        .to_string());
+    }
+    let resolved = resolve_connection(auth_state, id).map_err(|_| {
+        tr!(
+            "Serwer pośredniczący (jump host) połączenia „{}” nie istnieje – wybierz go ponownie w ustawieniach połączenia.",
+            "The jump host of “{}” does not exist – choose it again in the connection settings.",
+            conn.name
+        )
+    })?;
+    if resolved.conn.protocol != "ssh" {
+        return Err(tr!("Serwer pośredniczący „{}” nie jest połączeniem SSH", "Jump host “{}” is not an SSH connection", resolved.conn.name));
+    }
+    let host = resolved.conn.host.clone();
+    let port = resolved.conn.port;
+    let config = SshConnectionConfig {
+        auth_type: resolved.conn.ssh_auth_type.clone(),
+        certificate: resolved.conn.certificate_content.clone(),
+        host: host.clone(),
+        port,
+        username: resolved.username.clone(),
+        password: resolved.password.clone(),
+        private_key: resolved.private_key.clone(),
+        passphrase: resolved.passphrase.clone(),
+        host_key_verifier: make_host_verifier(app, "ssh", host, port),
+        jump: jump_host_chain(auth_state, &resolved.conn, app, seen)?,
+    };
+    Ok(Some(Box::new(ssh::JumpHost { name: resolved.conn.name.clone(), config })))
 }
 
 #[cfg(test)]

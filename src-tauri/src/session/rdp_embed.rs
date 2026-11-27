@@ -484,7 +484,7 @@ pub async fn rdp_embed_start(
             )
             .to_string());
         }
-        let mut config = super::rdp_config_for_connection(&auth_state, &connection_id, title, None)?;
+        let mut config = super::rdp_config_for_connection(&auth_state, &connection_id, title, None, &app)?;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         let app_main = app.clone();

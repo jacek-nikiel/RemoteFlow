@@ -98,8 +98,21 @@ pub(crate) fn vault_save_connection_impl(mut connection: Connection, raw_passwor
         connection.created_at = now;
     }
 
+    if !matches!(connection.protocol.as_str(), "ssh" | "rdp") || connection.jump_host_id.as_deref() == Some("") {
+        connection.jump_host_id = None;
+    }
     let saved = connection.clone();
     update_vault(key, |v| {
+        use crate::vault::models::jump_hosts::{check, JumpProblem};
+        if let Some(problem) = check(&v.connections, &connection) {
+            return Err(match problem {
+                JumpProblem::ItSelf => tr!("Połączenie nie może być własnym serwerem pośredniczącym (jump host).", "A connection cannot be its own jump host."),
+                JumpProblem::Missing => tr!("Wybrany serwer pośredniczący (jump host) nie istnieje.", "The chosen jump host does not exist."),
+                JumpProblem::NotSsh => tr!("Serwerem pośredniczącym (jump host) może być tylko połączenie SSH.", "Only an SSH connection can be a jump host."),
+                JumpProblem::Loop => tr!("Serwery pośredniczące (jump host) utworzyłyby pętlę.", "The jump hosts would form a loop."),
+            }
+            .to_string());
+        }
         upsert_by_id(&mut v.connections, connection, |c| c.id.as_str());
         Ok(())
     })?;
@@ -112,6 +125,10 @@ pub fn vault_delete_connection(connection_id: &str, state: tauri::State<'_, Auth
     let key = mgr.unlocked_key()?;
     update_vault(key, |v| {
         v.connections.retain(|c| c.id != connection_id);
+        // Connections that went through it now connect directly
+        for c in v.connections.iter_mut().filter(|c| c.jump_host_id.as_deref() == Some(connection_id)) {
+            c.jump_host_id = None;
+        }
         Ok(())
     })
 }

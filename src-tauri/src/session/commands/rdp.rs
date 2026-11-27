@@ -21,9 +21,10 @@ pub fn session_launch_external_rdp(
 ) -> Result<(), String> {
     let _ = (&host, port, &username);
     let resolved = resolve_connection(&auth_state, &connection_id)?;
+    let jump = jump_host_chain(&auth_state, &resolved.conn, &app, &mut Vec::new())?;
 
     let (kill_tx, kill_rx) = std::sync::mpsc::channel();
-    let rdp_config = rdp_config_from(resolved, title, None);
+    let rdp_config = rdp_config_from(resolved, title, None, jump);
 
     rdp::spawn_rdp_session(session_id.clone(), rdp_config, kill_rx, app);
 
@@ -32,7 +33,12 @@ pub fn session_launch_external_rdp(
     Ok(())
 }
 
-fn rdp_config_from(resolved: ResolvedConnection, title: String, embed: Option<rdp::EmbedTarget>) -> rdp::RdpConnectionConfig {
+fn rdp_config_from(
+    resolved: ResolvedConnection,
+    title: String,
+    embed: Option<rdp::EmbedTarget>,
+    jump: Option<Box<crate::session::ssh::JumpHost>>,
+) -> rdp::RdpConnectionConfig {
     rdp::RdpConnectionConfig {
         connection_id: resolved.conn.id.clone(),
         certificate_fingerprint: resolved.rdp_fingerprint,
@@ -44,6 +50,7 @@ fn rdp_config_from(resolved: ResolvedConnection, title: String, embed: Option<rd
         domain: resolved.conn.rdp_settings.as_ref().and_then(|s| s.domain.clone()),
         rdp_settings: resolved.conn.rdp_settings.clone(),
         embed,
+        jump,
     }
 }
 
@@ -58,19 +65,20 @@ pub struct RdpCertificateInfo {
 }
 
 #[tauri::command]
-pub async fn rdp_certificate_preview(connection_id: String, auth_state: tauri::State<'_, AuthState>) -> Result<RdpCertificateInfo, String> {
+pub async fn rdp_certificate_preview(connection_id: String, auth_state: tauri::State<'_, AuthState>, app: tauri::AppHandle) -> Result<RdpCertificateInfo, String> {
     let resolved = resolve_connection(&auth_state, &connection_id)?;
+    let jump = jump_host_chain(&auth_state, &resolved.conn, &app, &mut Vec::new())?.map(|j| *j);
     if resolved.conn.protocol != "rdp" { return Err(tr!("To nie jest połączenie RDP", "Not an RDP connection").into()); }
     let host = resolved.conn.host;
     let port = resolved.conn.port;
-    let fingerprint = rdp_proxy::probe_certificate(&host, port).await?;
+    let fingerprint = rdp_proxy::probe_certificate(&host, port, jump).await?;
     Ok(RdpCertificateInfo { connection_id, host, port, fingerprint, previous_fingerprint: resolved.rdp_fingerprint })
 }
 
 #[tauri::command]
 pub async fn rdp_certificate_trust(connection_id: String, host: String, port: u16, fingerprint: String,
-    previous_fingerprint: Option<String>, auth_state: tauri::State<'_, AuthState>) -> Result<(), String> {
-    let preview = rdp_certificate_preview(connection_id.clone(), auth_state.clone()).await?;
+    previous_fingerprint: Option<String>, auth_state: tauri::State<'_, AuthState>, app: tauri::AppHandle) -> Result<(), String> {
+    let preview = rdp_certificate_preview(connection_id.clone(), auth_state.clone(), app).await?;
     if preview.host != host || preview.port != port || preview.fingerprint != fingerprint {
         return Err(tr!("Certyfikat lub adres serwera zmienił się. Sprawdź odcisk ponownie.", "The certificate or server address changed. Check the fingerprint again.").into());
     }
@@ -98,8 +106,11 @@ pub(crate) fn rdp_config_for_connection(
     connection_id: &str,
     title: String,
     embed: Option<rdp::EmbedTarget>,
+    app: &tauri::AppHandle,
 ) -> Result<rdp::RdpConnectionConfig, String> {
-    Ok(rdp_config_from(resolve_connection(auth_state, connection_id)?, title, embed))
+    let resolved = resolve_connection(auth_state, connection_id)?;
+    let jump = jump_host_chain(auth_state, &resolved.conn, app, &mut Vec::new())?;
+    Ok(rdp_config_from(resolved, title, embed, jump))
 }
 
 

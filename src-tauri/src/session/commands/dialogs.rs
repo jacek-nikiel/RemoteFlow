@@ -69,7 +69,7 @@ pub async fn pick_local_folder() -> Result<Option<String>, String> {
 
 /// Native "open file" dialog (blocking). Not exposed to the UI as a command: the UI never gets
 /// to choose which local file the backend reads.
-fn pick_file_dialog(title: Option<String>) -> Result<Option<String>, String> {
+pub(crate) fn pick_file_dialog(title: Option<String>) -> Result<Option<String>, String> {
     {
         let dialog_title = title.unwrap_or_else(|| tr!("Wybierz plik klucza prywatnego SSH", "Choose the SSH private key file").to_string());
         #[cfg(target_os = "windows")]
@@ -339,4 +339,41 @@ pub fn app_exit(app: tauri::AppHandle) {
 #[tauri::command]
 pub fn app_maximize_window(window: tauri::Window) -> Result<(), String> {
     window.maximize().map_err(|e| e.to_string())
+}
+
+/// "Save as OpenSSH…" for a PuTTY key (.ppk): converts it (keeping the passphrase, if any) and
+/// saves it where the user chooses. Returns the saved path, `None` when cancelled.
+#[tauri::command]
+pub async fn ppk_save_as_openssh(
+    content: String,
+    passphrase: Option<String>,
+    auth_state: tauri::State<'_, crate::auth::AuthState>,
+) -> Result<Option<String>, String> {
+    let access = crate::session::localfs::local_access(&auth_state)?;
+    let content = zeroize::Zeroizing::new(content);
+    let passphrase = passphrase.map(zeroize::Zeroizing::new);
+    let pass = passphrase.as_deref().map(String::as_str).filter(|p| !p.is_empty());
+    let converted = crate::session::ppk::to_openssh(&content, pass, pass).map_err(|e| e.message())?;
+    tokio::task::spawn_blocking(move || {
+        let title = tr!("Zapisz klucz w formacie OpenSSH", "Save the key in the OpenSSH format");
+        let Some(path) = save_file_dialog(title, "id_key", "OpenSSH", "key")? else {
+            return Ok(None);
+        };
+        access.check(&path)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts
+            .open(&path)
+            .map_err(|e| tr!("Nie można zapisać pliku '{}': {}", "Cannot save the file '{}': {}", path.display(), e))?;
+        std::io::Write::write_all(&mut file, converted.as_bytes())
+            .map_err(|e| tr!("Nie można zapisać pliku '{}': {}", "Cannot save the file '{}': {}", path.display(), e))?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

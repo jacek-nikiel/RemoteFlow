@@ -17,12 +17,14 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 use zeroize::Zeroizing;
 
+mod import_sources;
 mod settings_cmds;
 mod transfer;
 mod vault_cmds;
 #[cfg(test)]
 mod tests;
 
+pub use import_sources::*;
 pub use settings_cmds::*;
 pub use transfer::*;
 pub use vault_cmds::*;
@@ -456,6 +458,7 @@ pub(crate) fn vault_unlock_master_impl(master_password: &str, accept_modified: O
 pub fn vault_lock(state: tauri::State<'_, AuthState>, app: tauri::AppHandle) -> Result<(), String> {
     crate::session::rdp_embed::set_locked(&app, true);
     crate::session::adhoc::clear();
+    forget_scans();
     let mut mgr = lock_auth(&state)?;
     mgr.clear();
     Ok(())

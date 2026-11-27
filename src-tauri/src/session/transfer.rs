@@ -115,6 +115,11 @@ fn config_identity(config: &SshConnectionConfig) -> [u8; 32] {
         hash.update((bytes.len() as u64).to_be_bytes());
         hash.update(bytes);
     }
+    // A different jump host (or its credentials) is a different connection
+    if let Some(jump) = &config.jump {
+        hash.update(b"jump");
+        hash.update(config_identity(&jump.config));
+    }
     hash.finalize().into()
 }
 
@@ -130,6 +135,7 @@ mod pool_identity_tests {
             host: "server-a".into(), port: 22, username: "alice".into(), auth_type: "password".into(),
             password: Some("old".into()), private_key: None, passphrase: None, certificate: None,
             host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         };
         let original = config_identity(&config);
         assert_eq!(original, config_identity(&config.clone()));
@@ -1029,6 +1035,7 @@ pub(crate) mod sftp_e2e {
             private_key: None,
             passphrase: None,
             host_key_verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
+            jump: None,
         }
     }
 

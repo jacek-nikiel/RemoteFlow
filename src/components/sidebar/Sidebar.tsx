@@ -25,6 +25,7 @@ import {
   Check,
   KeyRound,
   User,
+  AlertCircle,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { anchorFromElement, DialogAnchor } from '../dialogs/ConfirmDialog';
@@ -656,6 +657,40 @@ const ConnectionItem: React.FC<ConnectionItemProps> = ({
   const isSSH = connection.protocol === 'ssh';
   const activeTunnelsCount = connection.portForwarding.filter((p) => p.enabled).length;
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [copyToast, setCopyToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const toastTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+  const showCopyToast = (message: string, type: 'success' | 'error', ms = 3000) => {
+    window.clearTimeout(toastTimerRef.current);
+    setCopyToast({ message, type });
+    toastTimerRef.current = window.setTimeout(() => setCopyToast(null), ms);
+  };
+  // Same as the tab menu: kept out of the clipboard history (Windows), cleared after 30 s
+  const copyPassword = async () => {
+    setContextMenu(null);
+    try {
+      const pwd = await api.revealPassword(connection.id);
+      if (!pwd) {
+        showCopyToast(t('Brak zapisanego hasła dla „{title}”', { title: connection.name }), 'error');
+        return;
+      }
+      await api.clipboardWriteSecret(pwd);
+      showCopyToast(t('Hasło połączenia „{title}” skopiowano do schowka – zniknie z niego za 30 s.', { title: connection.name }), 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showCopyToast(t('Błąd podczas pobierania hasła: {msg}', { msg }), 'error', 4000);
+    }
+  };
+  const copyUsername = async () => {
+    setContextMenu(null);
+    try {
+      await api.clipboardWriteText(connection.username);
+      showCopyToast(t('Login ({username}) skopiowany do schowka!', { username: connection.username }), 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showCopyToast(t('Błąd: {msg}', { msg }), 'error', 4000);
+    }
+  };
   const optionsRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -810,17 +845,7 @@ const ConnectionItem: React.FC<ConnectionItemProps> = ({
 
             {/* Copy Password */}
             <button
-              onClick={async () => {
-                setContextMenu(null);
-                try {
-                  const pwd = await api.revealPassword(connection.id);
-                  if (pwd) {
-                    await api.clipboardWriteText(pwd);
-                  }
-                } catch (e) {
-                  console.warn('Error copying password:', e);
-                }
-              }}
+              onClick={copyPassword}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-slate-800 hover:text-cyan-400 transition-colors"
             >
               <KeyRound className="h-3.5 w-3.5 text-cyan-400" />
@@ -830,14 +855,7 @@ const ConnectionItem: React.FC<ConnectionItemProps> = ({
             {/* Copy Username */}
             {connection.username && (
               <button
-                onClick={async () => {
-                  setContextMenu(null);
-                  try {
-                    await api.clipboardWriteText(connection.username);
-                  } catch (e) {
-                    console.warn('Error copying username:', e);
-                  }
-                }}
+                onClick={copyUsername}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-slate-800 hover:text-cyan-400 transition-colors"
               >
                 <User className="h-3.5 w-3.5 text-slate-400" />
@@ -875,6 +893,19 @@ const ConnectionItem: React.FC<ConnectionItemProps> = ({
               <span>{t('Usuń połączenie')}</span>
             </button>
           </div>
+        </div>
+      )}
+
+      {copyToast && (
+        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/95 px-4 py-2 text-xs shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-200">
+          {copyToast.type === 'success' ? (
+            <Check className="h-4 w-4 text-emerald-400 shrink-0" />
+          ) : (
+            <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
+          )}
+          <span className={copyToast.type === 'success' ? 'text-emerald-300 font-medium' : 'text-amber-300 font-medium'}>
+            {copyToast.message}
+          </span>
         </div>
       )}
     </>

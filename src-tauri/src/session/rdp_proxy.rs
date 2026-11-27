@@ -21,6 +21,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// SSH login to the jump host(s) plus the channel to the RDP server.
+const JUMP_TIMEOUT: Duration = Duration::from_secs(60);
 
 static RDP_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -44,9 +46,18 @@ impl RdpProxyHandle {
     }
 }
 
+/// Jump host route of an RDP connection: the jump host and the real target host and port.
+#[derive(Clone)]
+pub struct RdpJump {
+    pub jump: crate::session::ssh::JumpHost,
+    pub host: String,
+    pub port: u16,
+}
+
 #[derive(Clone)]
 struct ProxyContext {
     target: String,
+    jump: Option<RdpJump>,
     token: Arc<String>,
     verifier: HostKeyVerifier,
     report: ErrorReporter,
@@ -65,6 +76,7 @@ pub fn start_rdp_proxy(
     token: String,
     verifier: HostKeyVerifier,
     report: ErrorReporter,
+    jump: Option<crate::session::ssh::JumpHost>,
 ) -> Result<RdpProxyHandle, String> {
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0")
         .map_err(|e| tr!("Błąd wiązania lokalnego proxy RDP: {}", "Error binding the local RDP proxy: {}", e))?;
@@ -78,6 +90,7 @@ pub fn start_rdp_proxy(
     let mut shutdown = shutdown_tx.subscribe();
     let ctx = ProxyContext {
         target: crate::session::host_port(&target_host, target_port),
+        jump: jump.map(|jump| RdpJump { jump, host: target_host.clone(), port: target_port }),
         token: Arc::new(token),
         verifier,
         report,
@@ -232,25 +245,53 @@ enum HandshakeError {
 type HandshakeResult = (Box<dyn IoStream>, Vec<u8>, Vec<Vec<u8>>);
 
 /// TCP connect, X.224 Connection Request/Confirm and TLS handshake with the configured server.
-async fn rdp_handshake(target: &str, x224_req: &[u8], mode: TlsMode) -> Result<HandshakeResult, HandshakeError> {
-    let mut tcp = match timeout(CONNECT_TIMEOUT, TcpStream::connect(target)).await {
-        Ok(Ok(t)) => {
-            let _ = t.set_nodelay(true);
-            t
+async fn rdp_handshake(target: &str, jump: Option<&RdpJump>, x224_req: &[u8], mode: TlsMode) -> Result<HandshakeResult, HandshakeError> {
+    let mut tcp = match jump {
+        Some(route) => {
+            // Through the jump host (SSH login + channel are blocking – off the async threads)
+            let route = route.clone();
+            let opened = timeout(JUMP_TIMEOUT, tokio::task::spawn_blocking(move || {
+                crate::session::jump::connect_via(&route.jump, &route.host, route.port)
+            }))
+            .await;
+            match opened {
+                Ok(Ok(Ok(std_stream))) => {
+                    let _ = std_stream.set_nonblocking(true);
+                    let t = TcpStream::from_std(std_stream).map_err(|e| HandshakeError::Fatal(e.to_string()))?;
+                    let _ = t.set_nodelay(true);
+                    t
+                }
+                Ok(Ok(Err(e))) => return Err(HandshakeError::Fatal(e)),
+                Ok(Err(e)) => return Err(HandshakeError::Fatal(e.to_string())),
+                Err(_) => {
+                    return Err(HandshakeError::Fatal(tr!(
+                        "Serwer pośredniczący nie zestawił połączenia z {} w {} s.",
+                        "The jump host did not reach {} within {} s.",
+                        target,
+                        JUMP_TIMEOUT.as_secs()
+                    )))
+                }
+            }
         }
-        Ok(Err(e)) => {
-            return Err(HandshakeError::Fatal(tr!(
-                "Nie można połączyć się z serwerem RDP {}: {}", "Cannot connect to RDP server {}: {}",
-                target, e
-            )))
-        }
-        Err(_) => {
-            return Err(HandshakeError::Fatal(tr!(
-                "Serwer RDP {} nie odpowiada (limit {} s). Sprawdź adres, port i zaporę sieciową.", "RDP server {} does not respond (timeout {} s). Check the address, port and firewall.",
-                target,
-                CONNECT_TIMEOUT.as_secs()
-            )))
-        }
+        None => match timeout(CONNECT_TIMEOUT, TcpStream::connect(target)).await {
+            Ok(Ok(t)) => {
+                let _ = t.set_nodelay(true);
+                t
+            }
+            Ok(Err(e)) => {
+                return Err(HandshakeError::Fatal(tr!(
+                    "Nie można połączyć się z serwerem RDP {}: {}", "Cannot connect to RDP server {}: {}",
+                    target, e
+                )))
+            }
+            Err(_) => {
+                return Err(HandshakeError::Fatal(tr!(
+                    "Serwer RDP {} nie odpowiada (limit {} s). Sprawdź adres, port i zaporę sieciową.", "RDP server {} does not respond (timeout {} s). Check the address, port and firewall.",
+                    target,
+                    CONNECT_TIMEOUT.as_secs()
+                )))
+            }
+        },
     };
 
     tcp.write_all(x224_req)
@@ -322,11 +363,12 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Reads the presented identity without credentials or establishing trust.
-pub async fn probe_certificate(host: &str, port: u16) -> Result<String, String> {
+pub async fn probe_certificate(host: &str, port: u16, jump: Option<crate::session::ssh::JumpHost>) -> Result<String, String> {
     const REQUEST: [u8; 19] = [3, 0, 0, 19, 14, 224, 0, 0, 0, 0, 0, 1, 0, 8, 0, 3, 0, 0, 0];
     let target = crate::session::host_port(host, port);
-    let result = match rdp_handshake(&target, &REQUEST, TlsMode::Modern).await {
-        Err(HandshakeError::Tls(_)) => rdp_handshake(&target, &REQUEST, TlsMode::Legacy).await,
+    let route = jump.map(|jump| RdpJump { jump, host: host.to_string(), port });
+    let result = match rdp_handshake(&target, route.as_ref(), &REQUEST, TlsMode::Modern).await {
+        Err(HandshakeError::Tls(_)) => rdp_handshake(&target, route.as_ref(), &REQUEST, TlsMode::Legacy).await,
         other => other,
     };
     match result {
@@ -428,14 +470,14 @@ async fn handle_client(ws_tcp: TcpStream, ctx: ProxyContext) {
     //      Server 2012 offers no ECDHE-RSA-AES-GCM suite and resets the connection – os error
     //      10054), retry the whole sequence with the system TLS stack, which supports the older
     //      CBC suites / TLS 1.0-1.1 that such servers need.
-    let (tls_stream, x224_resp, chain) = match rdp_handshake(&ctx.target, &x224_req, TlsMode::Modern).await {
+    let (tls_stream, x224_resp, chain) = match rdp_handshake(&ctx.target, ctx.jump.as_ref(), &x224_req, TlsMode::Modern).await {
         Ok(r) => r,
         Err(HandshakeError::Tls(modern_err)) => {
             eprintln!(
                 "[RemoteFlow RDP Proxy] TLS (rustls) odrzucony przez {}: {} – próba trybu zgodności (TLS systemowy)",
                 ctx.target, modern_err
             );
-            match rdp_handshake(&ctx.target, &x224_req, TlsMode::Legacy).await {
+            match rdp_handshake(&ctx.target, ctx.jump.as_ref(), &x224_req, TlsMode::Legacy).await {
                 Ok(r) => r,
                 Err(HandshakeError::Tls(legacy_err)) | Err(HandshakeError::Fatal(legacy_err)) => {
                     ctx.fail(format!(
@@ -553,7 +595,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_closes_an_accepted_client_waiting_for_authentication() {
         let proxy = start_rdp_proxy("127.0.0.1".into(), 9, "secret".into(),
-            HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))), Arc::new(|_| {})).unwrap();
+            HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))), Arc::new(|_| {}), None).unwrap();
         let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}", proxy.port)).await.unwrap();
         proxy.shutdown();
         let message = timeout(Duration::from_secs(2), client.next()).await.expect("accepted clients must stop too");
@@ -563,6 +605,7 @@ mod tests {
     fn ctx_for(port: u16) -> ProxyContext {
         ProxyContext {
             target: format!("127.0.0.1:{}", port),
+            jump: None,
             token: Arc::new("t".to_string()),
             verifier: HostKeyVerifier(Arc::new(|_| Ok(HostTrust::Known))),
             report: Arc::new(|_| {}),
@@ -587,9 +630,9 @@ mod tests {
     async fn legacy_server_needs_fallback() {
         // Server with only ECDHE-RSA-AES-CBC (like Windows Server 2012): rustls must fail ...
         let ctx = ctx_for(33891);
-        assert!(matches!(rdp_handshake(&ctx.target, &X224_CR, TlsMode::Modern).await, Err(HandshakeError::Tls(_))));
+        assert!(matches!(rdp_handshake(&ctx.target, None, &X224_CR, TlsMode::Modern).await, Err(HandshakeError::Tls(_))));
         // ... and the system TLS fallback must succeed.
-        let (stream, x224, chain) = rdp_handshake(&ctx.target, &X224_CR, TlsMode::Legacy).await.ok().expect("legacy ok");
+        let (stream, x224, chain) = rdp_handshake(&ctx.target, None, &X224_CR, TlsMode::Legacy).await.ok().expect("legacy ok");
         assert_eq!(x224.len(), 19);
         assert_eq!(chain.len(), 1);
         assert_eq!(roundtrip(stream).await, b"ECHO:ping");
@@ -599,7 +642,7 @@ mod tests {
     #[ignore]
     async fn modern_server_uses_rustls() {
         let ctx = ctx_for(33892);
-        let (stream, _, chain) = rdp_handshake(&ctx.target, &X224_CR, TlsMode::Modern).await.ok().expect("modern ok");
+        let (stream, _, chain) = rdp_handshake(&ctx.target, None, &X224_CR, TlsMode::Modern).await.ok().expect("modern ok");
         assert!(!chain.is_empty());
         assert_eq!(roundtrip(stream).await, b"ECHO:ping");
     }

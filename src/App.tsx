@@ -924,7 +924,8 @@ const t = useT();
 
   const deleteConnectionNow = async (id: string) => {
     await api.deleteConnection(id);
-    setConnections((prev) => prev.filter((c) => c.id !== id));
+    // Connections that went through it as a jump host now connect directly (as in the vault)
+    setConnections((prev) => prev.filter((c) => c.id !== id).map((c) => (c.jumpHostId === id ? { ...c, jumpHostId: undefined } : c)));
   };
 
   const describePendingDelete = (): { title: string; message: string } => {
@@ -933,9 +934,16 @@ const t = useT();
       const c = connections.find((x) => x.id === pendingDelete.id);
       return {
         title: t('Usunąć połączenie?'),
-        message: c
-          ? t('Połączenie „{name}” ({p1} {host}:{port}) zostanie trwale usunięte z sejfu.', { name: c.name, p1: c.protocol.toUpperCase(), host: c.host, port: c.port })
-          : t('Połączenie zostanie trwale usunięte z sejfu.'),
+        message:
+          (c
+            ? t('Połączenie „{name}” ({p1} {host}:{port}) zostanie trwale usunięte z sejfu.', { name: c.name, p1: c.protocol.toUpperCase(), host: c.host, port: c.port })
+            : t('Połączenie zostanie trwale usunięte z sejfu.')) +
+          (() => {
+            const users = connections.filter((x) => x.jumpHostId === pendingDelete.id).map((x) => x.name);
+            return users.length
+              ? ' ' + t('Jest serwerem pośredniczącym (jump host) dla: {names} – te połączenia będą łączyć się bezpośrednio.', { names: users.slice(0, 5).join(', ') + (users.length > 5 ? '…' : '') })
+              : '';
+          })(),
       };
     }
     const g = groups.find((x) => x.id === pendingDelete.id);
@@ -1273,6 +1281,7 @@ const t = useT();
         onSave={handleSaveConnection}
         editingConnection={editingConn}
         draft={connDraft}
+        connections={connections}
         groups={groups}
         credentials={credentials}
         defaultGroupId={defaultGroupId}

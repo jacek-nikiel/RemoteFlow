@@ -125,7 +125,7 @@ export const Header: React.FC<Props> = ({
 
         <button
           onClick={onOpenImportExport}
-          title={t('Import / Eksport bazy połączeń (mRemoteNG, JSON, .rfvault)')}
+          title={t('Import / Eksport bazy połączeń (mRemoteNG, OpenSSH, PuTTY, WinSCP, JSON, .rfvault)')}
           className="flex items-center gap-1 rounded-md border border-slate-800 bg-slate-800/60 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
         >
           <ArrowDownUp className="h-3 w-3 text-cyan-400" />

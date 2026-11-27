@@ -9,6 +9,20 @@ The version is kept in three files that must match (checked by the `version_test
 Each release has a section for the same version (`## X.Y.Z – …`) in this file and in `CHANGELOG.pl.md`; both go into the
 release notes, and the in-app update notice shows the one in the interface language.
 
+## 1.19.0 – jump host for SSH and RDP, PuTTY .ppk keys, import from OpenSSH/PuTTY/WinSCP, FIDO2 keys via the SSH agent
+
+### Added
+- **Jump host (ProxyJump, like `ssh -J`):** an SSH connection can go through another saved SSH connection (bastion), which logs in with its own credentials. Chains (A through B through C) work; a loop or a non-SSH jump host is refused when saving. The form shows the route (this computer → bastion → target). Terminal, SFTP and tunnels all go through the jump host. Deleting a connection that others use as a jump host makes them connect directly (the confirmation says which).
+- **RDP through a jump host (SSH tunnel):** the same field in RDP connections. The embedded client connects through the bastion's channel directly (no open local port); FreeRDP and mstsc get a local port on 127.0.0.1 that leads through the bastion. The server certificate stays bound to the real server address.
+- **FIDO2 / U2F security keys (YubiKey, `sk-ssh-ed25519`, `sk-ecdsa-sha2-nistp256`) through the SSH agent:** with *SSH agent* login, keys held by the OpenSSH agent (Windows 10/11 or Linux) work; the terminal asks you to touch the key. libssh2 dropped part of the security-key signature (flags and counter), so the server refused the login – these keys are now signed through the agent directly.
+- **PuTTY keys (.ppk) work directly:** formats 2 and 3, RSA, Ed25519 and ECDSA, also encrypted (the key passphrase is used). The key is converted to OpenSSH in memory at each connection – the file stays as it is. **Save as OpenSSH…** in the key fields writes a converted copy (with the same passphrase).
+- **Import from OpenSSH, PuTTY and WinSCP** (Import / Export → OpenSSH / PuTTY / WinSCP): `~/.ssh/config` (Host, HostName, User, Port, IdentityFile, ProxyJump / `ProxyCommand ssh -W`, Local/Remote/DynamicForward, Include, wildcard defaults), PuTTY sessions (Windows registry, `~/.putty/sessions` or a .reg file; keys and tunnels) and WinSCP sites (registry, WinSCP.ini or a .reg file; folders, saved passwords, the SSH tunnel as a jump host). A preview list with check boxes; entries already in the vault are marked and not chosen; target folder or a new one. Passwords read from WinSCP never pass through the user interface – they are encrypted with the vault key.
+- **Searching the jump host list**: the jump host field has a search box (name, address, user, folder, tags) and keyboard navigation – handy with many servers.
+
+### Fixed
+- **An SSH error that came at once** (e.g. a refused connection) is shown in the terminal again – before, the tab only turned red.
+- **Copying a password from the connection tree** now works like copying it from a tab: a message confirms it, the password is removed from the clipboard after 30 seconds and (Windows) it is kept out of the clipboard history. Copying the login also shows a confirmation.
+
 ## 1.18.0 – command palette and Quick Connect, SFTP rename/move/permissions, restore previous sessions
 
 ### Added
